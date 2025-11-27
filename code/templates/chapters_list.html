@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Chapters – {{ story_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+{% endblock %}
+{% block content %}
+<h1>Chapters ({{ story_id }})</h1>
+<table>
+  <tr><th>ID</th><th>Slug</th><th>Title</th><th>Target words</th><th>Edit</th></tr>
+  {% for ch in chapters %}
+    <tr>
+      <td>{{ ch.id }}</td>
+      <td>{{ ch.slug }}</td>
+      <td>{{ ch.title }}</td>
+      <td>{{ ch.target_words or "" }}</td>
+      <td><a href="/story/{{ story_id }}/chapters/{{ ch.id }}">Edit</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No chapters defined.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

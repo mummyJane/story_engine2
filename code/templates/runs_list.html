@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Runs – {{ story_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+{% endblock %}
+{% block content %}
+<h1>Runs ({{ story_id }})</h1>
+<table>
+  <tr><th>Run ID</th><th>Timestamp</th><th>Model</th><th>Temp</th><th>Chapters</th><th>Open</th></tr>
+  {% for r in runs %}
+    <tr>
+      <td>{{ r.run_id }}</td>
+      <td>{{ r.timestamp }}</td>
+      <td>{{ r.model_id }}</td>
+      <td>{{ r.temperature }}</td>
+      <td>{{ r.chapters | length }}</td>
+      <td><a href="/story/{{ story_id }}/runs/{{ r.run_id }}">Open</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">No runs yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

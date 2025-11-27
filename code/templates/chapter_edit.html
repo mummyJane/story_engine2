@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Edit Chapter {{ chapter.id }} – {{ story_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+{% endblock %}
+{% block content %}
+<h1>Edit Chapter {{ chapter.id }} – {{ chapter.title }}</h1>
+
+<form method="post">
+  <label>Title:<br />
+    <input type="text" name="title" value="{{ chapter.title }}" style="width:100%;" />
+  </label><br /><br />
+
+  <label>Slug:<br />
+    <input type="text" name="slug" value="{{ chapter.slug }}" style="width:100%;" />
+  </label><br /><br />
+
+  <label>Target words:<br />
+    <input type="number" name="target_words" value="{{ chapter.target_words or 2000 }}" />
+  </label><br /><br />
+
+  <label>End hook:<br />
+    <textarea name="end_hook">{{ chapter.end_hook }}</textarea>
+  </label><br /><br />
+
+  <label>Beat summary (one per line):<br />
+    <textarea name="beats_text">{{ beats_text }}</textarea>
+  </label><br /><br />
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}
