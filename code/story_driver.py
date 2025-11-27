@@ -20,7 +20,7 @@ TOKENS_PER_WORD = 1.4
 VOICES_DIR = Path(__file__).parent / "voices"
 
 
-# ---------- Data classes ----------
+# ---------- Data classes for run metadata ----------
 
 @dataclass
 class RunChapterInfo:
@@ -74,14 +74,14 @@ def choose_model_interactive(models: List[Dict[str, Any]]) -> Dict[str, Any]:
         print("Out of range.")
 
 
-def generate_chapter(
+def lmstudio_chat(
     model_id: str,
     system_prompt: str,
     user_prompt: str,
     temperature: float,
     max_tokens: int,
-) -> (str, Dict[str, Any]):
-    """Call LM Studio chat completions and return (text, usage)."""
+) -> Dict[str, Any]:
+    """Low-level wrapper around LM Studio /api/v0/chat/completions."""
     payload = {
         "model": model_id,
         "messages": [
@@ -89,12 +89,30 @@ def generate_chapter(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,  # may vary per chapter based on target words
+        "max_tokens": max_tokens,
         "stream": False,
     }
     resp = requests.post(REST_CHAT, json=payload, timeout=600)
     resp.raise_for_status()
     data = resp.json()
+    return data
+
+
+def generate_chapter(
+    model_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_tokens: int,
+) -> (str, Dict[str, Any]):
+    """Generate chapter text via LM Studio."""
+    data = lmstudio_chat(
+        model_id=model_id,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
     content = data["choices"][0]["message"]["content"]
     usage = data.get("usage", {})
     return content, usage
@@ -187,12 +205,11 @@ def text_to_speech(text: str, out_path: Path, voice_model: Optional[Path]):
         )
     except FileNotFoundError:
         print("  [TTS] ffmpeg not found on PATH. Leaving WAV only.")
-        # If we can't convert, at least leave audio with the requested name
         try:
             out_path.unlink()
         except FileNotFoundError:
             pass
-        wav_path.rename(out_path)  # not really MP3, but still playable audio
+        wav_path.rename(out_path)
         return
     except subprocess.CalledProcessError as e:
         print(f"  [TTS] ffmpeg failed ({e}). Leaving WAV only.")
@@ -260,19 +277,246 @@ def build_chapter_prompt(
     )
 
 
-def summarise_previous_chapters(story: Dict[str, Any], runs: List[RunInfo]) -> str:
+# ---------- NEW: metadata analysis & merging ----------
+
+def safe_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """Try to extract a JSON object from the model's text."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to strip Markdown code fences or extra text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def analyse_chapter_metadata(
+    model_id: str,
+    story: Dict[str, Any],
+    chapter_text: str,
+    chapter_outline: Dict[str, Any],
+) -> Dict[str, Any]:
     """
-    Minimal placeholder: you probably already have a real summariser.
-    For now we just list which chapters exist in previous runs.
+    Ask LM Studio to produce structured JSON metadata for the chapter:
+    summary, people, locations, items, events, new_people, new_locations, new_items.
     """
-    if not runs:
+
+    world = story.get("world", {})
+    people = world.get("people", {})
+    locations = world.get("locations", {})
+    items = world.get("items", {})
+
+    def format_map(m: Dict[str, Any]) -> str:
+        lines = []
+        for k, v in m.items():
+            name = v.get("name", "")
+            lines.append(f"- {k}: {name}")
+        return "\n".join(lines) if lines else "(none)"
+
+    people_desc = format_map(people)
+    locations_desc = format_map(locations)
+    items_desc = format_map(items)
+
+    sys_prompt = (
+        "You are a tool that analyses chapters of a long-form novel and emits ONLY JSON.\n"
+        "You never add commentary, explanations, or markdown fences.\n"
+    )
+
+    user_prompt = f"""
+We are maintaining a structured story bible.
+
+Existing people (id: name):
+{people_desc}
+
+Existing locations (id: name):
+{locations_desc}
+
+Existing items (id: name):
+{items_desc}
+
+Now analyse the following chapter and output a single JSON object with this structure:
+
+{{
+  "summary": "3–6 sentences summarising the chapter.",
+  "people": ["list", "of", "character_ids_or_new_names"],
+  "locations": ["list", "of", "location_ids_or_new_names"],
+  "items": ["list", "of", "item_ids_or_new_names"],
+  "events": [
+    {{
+      "id": null,
+      "summary": "Short one-line event description.",
+      "time_hint": "Optional approximate time, or null"
+    }}
+  ],
+  "new_people": [
+    {{
+      "id": "machine_id_like_nurse_jane",
+      "name": "Human Name",
+      "notes": "Optional notes"
+    }}
+  ],
+  "new_locations": [
+    {{
+      "id": "machine_id_like_unit_1_babies",
+      "name": "Human Name",
+      "notes": "Optional notes"
+    }}
+  ],
+  "new_items": [
+    {{
+      "id": "machine_id_like_pink_sleeper",
+      "name": "Human Name",
+      "notes": "Optional notes"
+    }}
+  ]
+}}
+
+Rules:
+- If there are no entries for a field, use an empty list [].
+- Prefer existing ids when referring to known people/locations/items.
+- For new_* entries, always provide an 'id' and 'name'.
+
+Chapter text:
+\"\"\"{chapter_text}\"\"\"
+"""
+
+    data = lmstudio_chat(
+        model_id=model_id,
+        system_prompt=sys_prompt,
+        user_prompt=user_prompt,
+        temperature=0.2,
+        max_tokens=1024,
+    )
+    raw = data["choices"][0]["message"]["content"]
+    meta = safe_json_from_text(raw)
+
+    if meta is None:
+        # Fallback if parsing fails
+        print("  [META] Failed to parse JSON from metadata response; using fallback.")
+        fallback = {
+            "summary": chapter_text[:400] + "...",
+            "people": [],
+            "locations": [],
+            "items": [],
+            "events": [],
+            "new_people": [],
+            "new_locations": [],
+            "new_items": [],
+        }
+        return fallback
+
+    # Ensure all expected keys exist
+    for key in [
+        "summary",
+        "people",
+        "locations",
+        "items",
+        "events",
+        "new_people",
+        "new_locations",
+        "new_items",
+    ]:
+        meta.setdefault(key, [] if key != "summary" else "")
+
+    return meta
+
+
+def merge_metadata_into_story(
+    story: Dict[str, Any],
+    ch_id: int,
+    slug: str,
+    title: str,
+    meta: Dict[str, Any],
+) -> None:
+    """
+    Update story["world"], story["timeline"], and story["chapters_state"]
+    using the metadata from one chapter.
+    """
+
+    world = story.setdefault("world", {})
+    people_map = world.setdefault("people", {})
+    locations_map = world.setdefault("locations", {})
+    items_map = world.setdefault("items", {})
+    timeline = story.setdefault("timeline", [])
+    chapters_state = story.setdefault("chapters_state", [])
+
+    # Merge new_* into world
+    for p in meta.get("new_people", []):
+        pid = p.get("id")
+        if pid and pid not in people_map:
+            people_map[pid] = {
+                "name": p.get("name", pid),
+                "notes": p.get("notes", ""),
+            }
+    for loc in meta.get("new_locations", []):
+        lid = loc.get("id")
+        if lid and lid not in locations_map:
+            locations_map[lid] = {
+                "name": loc.get("name", lid),
+                "notes": loc.get("notes", ""),
+            }
+    for it in meta.get("new_items", []):
+        iid = it.get("id")
+        if iid and iid not in items_map:
+            items_map[iid] = {
+                "name": it.get("name", iid),
+                "notes": it.get("notes", ""),
+            }
+
+    # Append events to timeline, record ids for this chapter
+    timeline_ids: List[str] = []
+    for ev in meta.get("events", []):
+        ev_id = ev.get("id")
+        if not ev_id:
+            ev_id = f"ev_{len(timeline) + 1:04d}"
+        ev["id"] = ev_id
+        ev["chapter_id"] = ch_id
+        timeline.append(ev)
+        timeline_ids.append(ev_id)
+
+    # Upsert per-chapter state
+    chapter_entry = None
+    for cs in chapters_state:
+        if cs.get("id") == ch_id:
+            chapter_entry = cs
+            break
+    if chapter_entry is None:
+        chapter_entry = {"id": ch_id, "slug": slug, "title": title}
+        chapters_state.append(chapter_entry)
+
+    chapter_entry["summary"] = meta.get("summary", "")
+    chapter_entry["people"] = meta.get("people", [])
+    chapter_entry["locations"] = meta.get("locations", [])
+    chapter_entry["items"] = meta.get("items", [])
+    chapter_entry["timeline_refs"] = timeline_ids
+
+
+def build_previous_chapters_summary(story: Dict[str, Any], upto_chapter_id: int) -> str:
+    """
+    Build a compact summary of previous chapters using story['chapters_state'].
+    """
+    chapters_state = story.get("chapters_state", [])
+    relevant = [cs for cs in chapters_state if cs.get("id", 0) < upto_chapter_id]
+    relevant.sort(key=lambda cs: cs.get("id", 0))
+
+    if not relevant:
         return "No prior chapters exist yet; this is the first chapter."
 
     lines = []
-    last_run = runs[-1]
-    for ch in last_run.chapters:
-        lines.append(f"Chapter {ch.chapter_id}: see file {ch.text_file}")
-    return "\n".join(lines)
+    for cs in relevant:
+        cid = cs.get("id")
+        title = cs.get("title", f"Chapter {cid}")
+        summary = cs.get("summary", "")
+        lines.append(f"Chapter {cid} – {title}:\n{summary}")
+    return "\n\n".join(lines)
 
 
 # ---------- Main pipeline ----------
@@ -340,14 +584,12 @@ def run_story(story_path: Path):
     outline = story.get("outline", {})
     chapter_outlines = outline.get("chapters", [])
 
-    # For now, previous_chapters_summary = simple stub
-    previous_chapters_summary = summarise_previous_chapters(story, [])
-
     new_run_chapters: List[RunChapterInfo] = []
 
     for ch_outline in chapter_outlines:
         ch_id = ch_outline["id"]
         slug = ch_outline.get("slug", f"ch{ch_id:02d}")
+        title = ch_outline.get("title", f"Chapter {ch_id}")
 
         # Determine per-chapter target words
         chapter_target_words = int(
@@ -362,6 +604,10 @@ def run_story(story_path: Path):
             f"Target words: {chapter_target_words}, "
             f"ideal_tokens ≈ {ideal_tokens}, "
             f"per_chapter_max_tokens = {per_chapter_max_tokens}"
+        )
+
+        previous_chapters_summary = build_previous_chapters_summary(
+            story, upto_chapter_id=ch_id
         )
 
         user_prompt = build_chapter_prompt(
@@ -379,13 +625,31 @@ def run_story(story_path: Path):
             max_tokens=per_chapter_max_tokens,
         )
 
+        # Save chapter text
         chapter_filename = f"{slug}.md"
         chapter_path = chapters_dir / chapter_filename
         chapter_path.write_text(chapter_text, encoding="utf-8")
 
+        # TTS
         audio_filename = f"{slug}.mp3"
         audio_path = audio_dir / audio_filename
         text_to_speech(chapter_text, audio_path, voice_model)
+
+        # NEW: analyse metadata and merge into story.json
+        print("  [META] Analysing chapter metadata...")
+        meta = analyse_chapter_metadata(
+            model_id=model_id,
+            story=story,
+            chapter_text=chapter_text,
+            chapter_outline=ch_outline,
+        )
+        merge_metadata_into_story(
+            story=story,
+            ch_id=ch_id,
+            slug=slug,
+            title=title,
+            meta=meta,
+        )
 
         ch_info = RunChapterInfo(
             chapter_id=ch_id,
@@ -396,10 +660,8 @@ def run_story(story_path: Path):
         )
         new_run_chapters.append(ch_info)
 
-        # Optionally update previous_chapters_summary using a real summariser
-        previous_chapters_summary += (
-            f"\nChapter {ch_id}: generated in {ch_info.text_file}"
-        )
+        # Save intermediate story.json after each chapter (so crashes don't lose everything)
+        save_story(story_path, story)
 
     run_info = RunInfo(
         run_id=run_id,
