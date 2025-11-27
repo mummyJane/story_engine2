@@ -15,6 +15,9 @@ LMSTUDIO_BASE = "http://localhost:1234"  # LM Studio server: lms server start
 REST_MODELS = f"{LMSTUDIO_BASE}/api/v0/models"
 REST_CHAT = f"{LMSTUDIO_BASE}/api/v0/chat/completions"
 
+# Rough tokens-per-word factor (depends on language/content, but this is fine)
+TOKENS_PER_WORD = 1.4  # NEW: used to map words → tokens
+
 
 # ---------- Data classes ----------
 
@@ -33,7 +36,8 @@ class RunInfo:
     timestamp: str
     model_id: str
     temperature: float
-    max_tokens: int
+    max_tokens_ceiling: int  # NEW: ceiling, not per-chapter exact
+    default_target_words: int  # NEW
     chapters: List[RunChapterInfo]
 
 
@@ -83,8 +87,7 @@ def generate_chapter(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": temperature,
-        # -1 = no explicit limit, but we want to be explicit for safety
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens,  # may vary per chapter based on target words
         "stream": False,
     }
     resp = requests.post(REST_CHAT, json=payload, timeout=600)
@@ -132,15 +135,13 @@ def save_story(story_path: Path, story: Dict[str, Any]):
 def build_system_prompt(story: Dict[str, Any]) -> str:
     """One centralized place to define your 'series bible' prompt."""
     title = story.get("title", "Untitled Story")
-    world = story.get("world", {})
-    # Keep this short and data-driven; you can expand later.
     return (
         f"You are an expert long-form fiction writer.\n\n"
         f"Story title: {title}\n\n"
         f"Use a consistent, immersive style, third-person limited POV when appropriate.\n"
         f"Stay grounded in the established world, characters, items and locations.\n"
         f"Do NOT break character or mention that you are an AI.\n"
-        f"Write vivid scenes, around 1500–2500 words per chapter.\n"
+        f"Write vivid scenes with natural pacing.\n"
         f"Keep continuity with the outline and prior chapters in the prompt.\n"
     )
 
@@ -149,6 +150,7 @@ def build_chapter_prompt(
     story: Dict[str, Any],
     chapter_outline: Dict[str, Any],
     previous_chapters_summary: str,
+    target_words: int,  # NEW
 ) -> str:
     """Build the user prompt for one chapter."""
     beats = "\n".join(f"- {b}" for b in chapter_outline.get("beat_summary", []))
@@ -159,6 +161,8 @@ def build_chapter_prompt(
         f"You are writing chapter '{title}'.\n\n"
         f"Previous chapters (summary):\n{previous_chapters_summary}\n\n"
         f"Chapter outline:\n{beats}\n\n"
+        f"Target length: around {target_words} words. "
+        f"It is OK to be within about ±15% of this, but do not go wildly shorter or longer.\n\n"
         f"End this chapter so that it naturally sets up:\n{end_hook}\n\n"
         f"Now write the full chapter as continuous prose."
     )
@@ -189,6 +193,14 @@ def run_story(story_path: Path):
     story["version_counter"] += 1
     version = story["version_counter"]
 
+    # Story-level default target words
+    default_target_words = int(story.get("default_target_words", 2000))  # NEW
+    print(f"Default target words per chapter from story.json: {default_target_words}")
+    tw_input = input(f"Override default target words per chapter [{default_target_words}]: ").strip()
+    if tw_input:
+        default_target_words = int(tw_input)
+    print(f"Using default_target_words = {default_target_words}")
+
     # Discover models from LM Studio
     models = list_lmstudio_models()
     if not models:
@@ -199,18 +211,18 @@ def run_story(story_path: Path):
     model_id = model_info["id"]
     max_ctx = int(model_info.get("max_context_length", 4096))
     # Heuristic: leave 40% for prompt, 60% for generation
-    default_max_tokens = int(max_ctx * 0.6)
+    suggested_ceiling = int(max_ctx * 0.6)
 
     print(f"Selected model: {model_id}")
     print(f"Model max context length: {max_ctx} tokens")
-    print(f"Suggested max_tokens for generation: {default_max_tokens}")
+    print(f"Suggested max_tokens ceiling for generation: {suggested_ceiling}")
 
-    # Allow user to tweak sampling
+    # Allow user to tweak sampling + global max_tokens ceiling
     temp_str = input("Temperature [0.8]: ").strip()
     temperature = float(temp_str) if temp_str else 0.8
 
-    mt_str = input(f"max_tokens [{default_max_tokens}]: ").strip()
-    max_tokens = int(mt_str) if mt_str else default_max_tokens
+    mt_str = input(f"Global max_tokens ceiling [{suggested_ceiling}]: ").strip()
+    max_tokens_ceiling = int(mt_str) if mt_str else suggested_ceiling
 
     # Build run id and directory
     ts = time.strftime("%Y%m%dT%H%M%S")
@@ -227,13 +239,6 @@ def run_story(story_path: Path):
     outline = story.get("outline", {})
     chapter_outlines = outline.get("chapters", [])
 
-    runs_metadata: List[RunInfo] = []
-    # Existing runs stored in story JSON
-    existing_runs_raw = story.get("runs", [])
-    for r in existing_runs_raw:
-        # We don't know all fields, so ignore for summary for now
-        pass
-
     # For now, previous_chapters_summary = simple stub
     previous_chapters_summary = summarise_previous_chapters(story, [])
 
@@ -242,12 +247,27 @@ def run_story(story_path: Path):
     for ch_outline in chapter_outlines:
         ch_id = ch_outline["id"]
         slug = ch_outline.get("slug", f"ch{ch_id:02d}")
-        print(f"\n=== Generating Chapter {ch_id}: {slug} ===")
+
+        # Determine per-chapter target words
+        chapter_target_words = int(
+            ch_outline.get("target_words", default_target_words)
+        )  # NEW
+        # Convert to tokens, with a safety factor
+        ideal_tokens = int(chapter_target_words * TOKENS_PER_WORD)  # NEW
+        per_chapter_max_tokens = min(ideal_tokens, max_tokens_ceiling)  # NEW
+
+        print(
+            f"\n=== Generating Chapter {ch_id}: {slug} ===\n"
+            f"Target words: {chapter_target_words}, "
+            f"ideal_tokens ≈ {ideal_tokens}, "
+            f"per_chapter_max_tokens = {per_chapter_max_tokens}"
+        )
 
         user_prompt = build_chapter_prompt(
             story=story,
             chapter_outline=ch_outline,
             previous_chapters_summary=previous_chapters_summary,
+            target_words=chapter_target_words,  # NEW
         )
 
         chapter_text, usage = generate_chapter(
@@ -255,7 +275,7 @@ def run_story(story_path: Path):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=per_chapter_max_tokens,  # NEW
         )
 
         chapter_filename = f"{slug}.md"
@@ -276,7 +296,6 @@ def run_story(story_path: Path):
         new_run_chapters.append(ch_info)
 
         # Optionally update previous_chapters_summary using a real summariser
-        # For now, just append file ref
         previous_chapters_summary += (
             f"\nChapter {ch_id}: generated in {ch_info.text_file}"
         )
@@ -286,7 +305,8 @@ def run_story(story_path: Path):
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         model_id=model_id,
         temperature=temperature,
-        max_tokens=max_tokens,
+        max_tokens_ceiling=max_tokens_ceiling,      # NEW
+        default_target_words=default_target_words,  # NEW
         chapters=new_run_chapters,
     )
 
@@ -303,8 +323,10 @@ def run_story(story_path: Path):
         "run_id": run_id,
         "model_id": model_id,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens_ceiling": max_tokens_ceiling,
+        "default_target_words": default_target_words,
         "lmstudio_base": LMSTUDIO_BASE,
+        "tokens_per_word": TOKENS_PER_WORD,
     }
     (run_dir / "config.json").write_text(
         json.dumps(config, indent=2), encoding="utf-8"
