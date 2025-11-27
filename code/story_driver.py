@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 import json
-import os
 import sys
 import time
-import uuid
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import requests
+import requests  # type: ignore
 import subprocess
 
 LMSTUDIO_BASE = "http://localhost:1234"  # LM Studio server: lms server start
@@ -16,7 +14,10 @@ REST_MODELS = f"{LMSTUDIO_BASE}/api/v0/models"
 REST_CHAT = f"{LMSTUDIO_BASE}/api/v0/chat/completions"
 
 # Rough tokens-per-word factor (depends on language/content, but this is fine)
-TOKENS_PER_WORD = 1.4  # NEW: used to map words → tokens
+TOKENS_PER_WORD = 1.4
+
+# Folder containing Piper .onnx voice models (change this if needed)
+VOICES_DIR = Path(__file__).parent / "voices"
 
 
 # ---------- Data classes ----------
@@ -36,8 +37,9 @@ class RunInfo:
     timestamp: str
     model_id: str
     temperature: float
-    max_tokens_ceiling: int  # NEW: ceiling, not per-chapter exact
-    default_target_words: int  # NEW
+    max_tokens_ceiling: int
+    default_target_words: int
+    voice_model: Optional[str]
     chapters: List[RunChapterInfo]
 
 
@@ -98,24 +100,114 @@ def generate_chapter(
     return content, usage
 
 
-# ---------- TTS stub ----------
+# ---------- TTS helpers ----------
 
-def text_to_speech(text: str, out_path: Path):
+def list_voice_models(voices_dir: Path) -> List[Path]:
+    """Return all .onnx voice models under voices_dir."""
+    if not voices_dir.is_dir():
+        return []
+    return sorted(voices_dir.glob("*.onnx"))
+
+
+def choose_voice_model_interactive(voices_dir: Path) -> Optional[Path]:
+    """Pick a Piper voice model (.onnx) from VOICES_DIR."""
+    voices = list_voice_models(voices_dir)
+    if not voices:
+        print(f"No .onnx voices found in {voices_dir}, TTS will use placeholder.")
+        return None
+
+    print(f"Found the following TTS voices in {voices_dir}:")
+    for idx, v in enumerate(voices):
+        print(f"[{idx}] {v.name}")
+
+    while True:
+        choice = input("Select voice index (or leave blank for no TTS): ").strip()
+        if choice == "":
+            return None
+        if not choice.isdigit():
+            print("Enter a number or blank.")
+            continue
+        idx = int(choice)
+        if 0 <= idx < len(voices):
+            return voices[idx]
+        print("Out of range.")
+
+
+def text_to_speech(text: str, out_path: Path, voice_model: Optional[Path]):
     """
-    Stub: convert text → MP3.
+    Convert text → MP3 using Piper + ffmpeg.
 
-    Replace this with your preferred engine, e.g. Piper:
-        echo "text" | piper -m voice.onnx -f out_path
+    - voice_model is a Path to a Piper .onnx file.
+    - out_path is the desired .mp3 path.
 
-    For now this just writes a dummy file to prove the pipeline works.
+    If no voice_model is provided, we write a small placeholder file instead.
     """
-    out_path.write_bytes(b"MP3 PLACEHOLDER\n")
-    # Example Piper call (commented out):
-    # proc = subprocess.run(
-    #     ["piper", "-m", "en_GB-some-voice.onnx", "-f", str(out_path)],
-    #     input=text.encode("utf-8"),
-    #     check=True,
-    # )
+    if voice_model is None:
+        out_path.write_bytes(b"MP3 PLACEHOLDER\n")
+        return
+
+    # First generate a temporary WAV with Piper
+    wav_path = out_path.with_suffix(".wav")
+
+    print(f"  [TTS] Using voice: {voice_model.name}")
+    try:
+        subprocess.run(
+            [
+                "piper",
+                "-m",
+                str(voice_model),
+                "-f",
+                str(wav_path),
+            ],
+            input=text.encode("utf-8"),
+            check=True,
+        )
+    except FileNotFoundError:
+        print("  [TTS] Piper not found on PATH. Writing placeholder instead.")
+        out_path.write_bytes(b"MP3 PLACEHOLDER (piper not found)\n")
+        return
+    except subprocess.CalledProcessError as e:
+        print(f"  [TTS] Piper failed ({e}). Writing placeholder instead.")
+        out_path.write_bytes(b"MP3 PLACEHOLDER (piper error)\n")
+        return
+
+    # Then convert WAV → MP3 using ffmpeg
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(wav_path),
+                str(out_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        print("  [TTS] ffmpeg not found on PATH. Leaving WAV only.")
+        # If we can't convert, at least leave audio with the requested name
+        try:
+            out_path.unlink()
+        except FileNotFoundError:
+            pass
+        wav_path.rename(out_path)  # not really MP3, but still playable audio
+        return
+    except subprocess.CalledProcessError as e:
+        print(f"  [TTS] ffmpeg failed ({e}). Leaving WAV only.")
+        try:
+            out_path.unlink()
+        except FileNotFoundError:
+            pass
+        wav_path.rename(out_path)
+        return
+
+    # Cleanup WAV if everything succeeded
+    try:
+        wav_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 # ---------- Story JSON helpers ----------
@@ -150,7 +242,7 @@ def build_chapter_prompt(
     story: Dict[str, Any],
     chapter_outline: Dict[str, Any],
     previous_chapters_summary: str,
-    target_words: int,  # NEW
+    target_words: int,
 ) -> str:
     """Build the user prompt for one chapter."""
     beats = "\n".join(f"- {b}" for b in chapter_outline.get("beat_summary", []))
@@ -194,9 +286,11 @@ def run_story(story_path: Path):
     version = story["version_counter"]
 
     # Story-level default target words
-    default_target_words = int(story.get("default_target_words", 2000))  # NEW
+    default_target_words = int(story.get("default_target_words", 2000))
     print(f"Default target words per chapter from story.json: {default_target_words}")
-    tw_input = input(f"Override default target words per chapter [{default_target_words}]: ").strip()
+    tw_input = input(
+        f"Override default target words per chapter [{default_target_words}]: "
+    ).strip()
     if tw_input:
         default_target_words = int(tw_input)
     print(f"Using default_target_words = {default_target_words}")
@@ -223,6 +317,13 @@ def run_story(story_path: Path):
 
     mt_str = input(f"Global max_tokens ceiling [{suggested_ceiling}]: ").strip()
     max_tokens_ceiling = int(mt_str) if mt_str else suggested_ceiling
+
+    # TTS voice selection
+    use_tts = input("Generate audio (Piper + ffmpeg)? [Y/n]: ").strip().lower()
+    if use_tts in ("", "y", "yes"):
+        voice_model = choose_voice_model_interactive(VOICES_DIR)
+    else:
+        voice_model = None
 
     # Build run id and directory
     ts = time.strftime("%Y%m%dT%H%M%S")
@@ -251,10 +352,10 @@ def run_story(story_path: Path):
         # Determine per-chapter target words
         chapter_target_words = int(
             ch_outline.get("target_words", default_target_words)
-        )  # NEW
+        )
         # Convert to tokens, with a safety factor
-        ideal_tokens = int(chapter_target_words * TOKENS_PER_WORD)  # NEW
-        per_chapter_max_tokens = min(ideal_tokens, max_tokens_ceiling)  # NEW
+        ideal_tokens = int(chapter_target_words * TOKENS_PER_WORD)
+        per_chapter_max_tokens = min(ideal_tokens, max_tokens_ceiling)
 
         print(
             f"\n=== Generating Chapter {ch_id}: {slug} ===\n"
@@ -267,7 +368,7 @@ def run_story(story_path: Path):
             story=story,
             chapter_outline=ch_outline,
             previous_chapters_summary=previous_chapters_summary,
-            target_words=chapter_target_words,  # NEW
+            target_words=chapter_target_words,
         )
 
         chapter_text, usage = generate_chapter(
@@ -275,7 +376,7 @@ def run_story(story_path: Path):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
-            max_tokens=per_chapter_max_tokens,  # NEW
+            max_tokens=per_chapter_max_tokens,
         )
 
         chapter_filename = f"{slug}.md"
@@ -284,7 +385,7 @@ def run_story(story_path: Path):
 
         audio_filename = f"{slug}.mp3"
         audio_path = audio_dir / audio_filename
-        text_to_speech(chapter_text, audio_path)
+        text_to_speech(chapter_text, audio_path, voice_model)
 
         ch_info = RunChapterInfo(
             chapter_id=ch_id,
@@ -305,8 +406,9 @@ def run_story(story_path: Path):
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         model_id=model_id,
         temperature=temperature,
-        max_tokens_ceiling=max_tokens_ceiling,      # NEW
-        default_target_words=default_target_words,  # NEW
+        max_tokens_ceiling=max_tokens_ceiling,
+        default_target_words=default_target_words,
+        voice_model=str(voice_model) if voice_model else None,
         chapters=new_run_chapters,
     )
 
@@ -325,8 +427,10 @@ def run_story(story_path: Path):
         "temperature": temperature,
         "max_tokens_ceiling": max_tokens_ceiling,
         "default_target_words": default_target_words,
+        "voice_model": str(voice_model) if voice_model else None,
         "lmstudio_base": LMSTUDIO_BASE,
         "tokens_per_word": TOKENS_PER_WORD,
+        "voices_dir": str(VOICES_DIR),
     }
     (run_dir / "config.json").write_text(
         json.dumps(config, indent=2), encoding="utf-8"
