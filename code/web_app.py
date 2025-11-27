@@ -67,14 +67,20 @@ async def index(request: Request):
         {"request": request, "stories": stories},
     )
 
-
 @app.get("/story/{story_id}", response_class=HTMLResponse)
 async def story_overview(request: Request, story_id: str):
     story = load_story(story_id)
-    world = story.get("world", {})
-    outline = story.get("outline", {})
-    chapters_state = story.get("chapters_state", [])
-    runs = story.get("runs", [])
+
+    world = story.setdefault("world", {})
+    world.setdefault("people", {})
+    world.setdefault("locations", {})
+    world.setdefault("items", {})
+
+    outline = story.setdefault("outline", {})
+    outline.setdefault("chapters", [])
+
+    chapters_state = story.setdefault("chapters_state", [])
+    runs = story.setdefault("runs", [])
 
     return templates.TemplateResponse(
         "story_overview.html",
@@ -432,4 +438,54 @@ async def run_chapter_detail(
             "events": chapter_events,
             "mp3_url": mp3_url,
         },
+    )
+
+@app.post("/stories/create")
+async def create_story(
+    story_id: str = Form(...),
+    title: str = Form(...),
+    default_target_words: int = Form(2000),
+):
+    """
+    Create a new story folder under /data/<story_id> with a minimal story.json,
+    then redirect to the story overview page.
+    """
+    story_id = story_id.strip()
+    if not story_id:
+        # could return a nicer page, but this will do for now
+        return HTMLResponse("story_id is required", status_code=400)
+
+    # Basic safety: no path separators
+    if "/" in story_id or "\\" in story_id:
+        return HTMLResponse("story_id cannot contain / or \\", status_code=400)
+
+    sdir = story_dir(story_id)
+    if sdir.exists():
+        return HTMLResponse(f"Story '{story_id}' already exists.", status_code=400)
+
+    sdir.mkdir(parents=True, exist_ok=False)
+
+    story = {
+        "story_id": story_id,
+        "title": title or story_id,
+        "version_counter": 0,
+        "default_target_words": int(default_target_words),
+        "world": {
+            "people": {},
+            "locations": {},
+            "items": {}
+        },
+        "timeline": [],
+        "outline": {
+            "chapters": []
+        },
+        "chapters_state": [],
+        "runs": []
+    }
+
+    save_story(story_id, story)
+
+    return RedirectResponse(
+        url=f"/story/{story_id}",
+        status_code=303,
     )

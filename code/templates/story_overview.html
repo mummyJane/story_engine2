@@ -14,9 +14,9 @@
 
 <h2>World</h2>
 <ul>
-  <li>People: {{ world.people | length if world.people else 0 }}</li>
-  <li>Locations: {{ world.locations | length if world.locations else 0 }}</li>
-  <li>Items: {{ world.items | length if world.items else 0 }}</li>
+  <li>People: {{ world["people"] | length }}</li>
+  <li>Locations: {{ world["locations"] | length }}</li>
+  <li>Items: {{ world["items"] | length }}</li>
 </ul>
 
 <h2>Chapters</h2>
