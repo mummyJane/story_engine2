@@ -12,6 +12,12 @@ from fastapi.templating import Jinja2Templates
 
 import json
 
+from story_core.lmstudio_client import list_lmstudio_models
+from story_core.tts import list_voice_models
+from story_core.runner import run_story_with_settings
+from story_core.model import RunSettings
+from story_core.config import default_voices_dir
+
 # Adjust as needed
 BASE_DIR = Path(__file__).parent
 DATA_ROOT = BASE_DIR / "data"
@@ -467,28 +473,6 @@ async def runs_list(request: Request, story_id: str):
     )
 
 
-@app.get("/story/{story_id}/runs/{run_id}", response_class=HTMLResponse)
-async def run_detail(
-    request: Request,
-    story_id: str,
-    run_id: str,
-):
-    story = load_story(story_id)
-    runs = story.get("runs", [])
-    run = next((r for r in runs if r.get("run_id") == run_id), None)
-    if run is None:
-        return HTMLResponse(
-            f"Run {run_id} not found in {story_id}.", status_code=404
-        )
-
-    return templates.TemplateResponse(
-        "run_detail.html",
-        {
-            "request": request,
-            "story_id": story_id,
-            "run": run,
-        },
-    )
 
 
 @app.get(
@@ -705,41 +689,112 @@ async def timeline_update(
         url=f"/story/{story_id}/timeline",
         status_code=303,
     )
+    
+@app.get("/story/{story_id}/runs/new", response_class=HTMLResponse)
+async def run_new(request: Request, story_id: str):
+    story = load_story(story_id)
+    default_target_words = int(story.get("default_target_words", 2000))
 
-@app.post("/story/{story_id}/runs/start")
-async def runs_start(story_id: str):
-    """
-    Start a new run by calling story_driver.py as a separate process.
+    models_error = None
+    try:
+        models = list_lmstudio_models()
+    except Exception as e:
+        models_error = str(e)
+        models = []
 
-    For now this uses the interactive CLI behaviour of story_driver.py:
-    prompts will appear in the uvicorn console.
-    """
-    # Path to story.json
-    s_path = story_json_path(story_id)
+    voices_dir = default_voices_dir()
+    voices = list_voice_models(voices_dir)
 
-    # Adjust this if story_driver.py lives in a different folder
-    from pathlib import Path
-    BASE_DIR = Path(__file__).parent
-    driver_path = BASE_DIR / "story_driver.py"
-
-    if not driver_path.is_file():
-        return HTMLResponse(
-            f"story_driver.py not found at {driver_path}", status_code=500
-        )
-
-    # Fire off story_driver as a separate process so the HTTP request
-    # returns immediately and you can keep using the web UI.
-    subprocess.Popen(
-        [
-            sys.executable,
-            str(driver_path),
-            str(s_path),
-        ],
-        cwd=str(BASE_DIR),
+    return templates.TemplateResponse(
+        "run_new.html",
+        {
+            "request": request,
+            "story_id": story_id,
+            "default_target_words": default_target_words,
+            "models": models,
+            "models_error": models_error,
+            "voices": voices,
+        },
     )
 
-    # Redirect back to the runs page – you can refresh later
+@app.post("/story/{story_id}/runs/start")
+async def runs_start(
+    story_id: str,
+    model_id: str = Form(...),
+    temperature: str = Form("0.8"),
+    max_tokens_ceiling: str = Form(""),
+    default_target_words: str = Form(""),
+    voice_model: str = Form(""),
+):
+    story_path = story_json_path(story_id)
+    story = load_story(story_id)
+
+    # Parse temperature
+    try:
+        temp_val = float(temperature) if temperature.strip() else 0.8
+    except ValueError:
+        temp_val = 0.8
+
+    # Default target words (from story if not provided)
+    story_default_tw = int(story.get("default_target_words", 2000))
+    try:
+        tw_val = int(default_target_words) if default_target_words.strip() else story_default_tw
+    except ValueError:
+        tw_val = story_default_tw
+
+    # max_tokens_ceiling: if blank, derive from model's max_context_length * 0.6
+    try:
+        if max_tokens_ceiling.strip():
+            mt_val = int(max_tokens_ceiling)
+        else:
+            models = list_lmstudio_models()
+            mt_val = 2048
+            for m in models:
+                if m.get("id") == model_id:
+                    max_ctx = int(m.get("max_context_length", 4096))
+                    mt_val = int(max_ctx * 0.6)
+                    break
+    except Exception:
+        mt_val = 2048
+
+    voice_model_str = voice_model.strip() or None
+
+    settings = RunSettings(
+        model_id=model_id,
+        temperature=temp_val,
+        max_tokens_ceiling=mt_val,
+        default_target_words=tw_val,
+        voice_model=voice_model_str,
+    )
+
+    # This will run synchronously in this request.
+    # For long stories you *may* want to move this into a background task later.
+    run_story_with_settings(story_path, settings)
+
     return RedirectResponse(
         url=f"/story/{story_id}/runs",
         status_code=303,
+    )
+
+@app.get("/story/{story_id}/runs/{run_id}", response_class=HTMLResponse)
+async def run_detail(
+    request: Request,
+    story_id: str,
+    run_id: str,
+):
+    story = load_story(story_id)
+    runs = story.get("runs", [])
+    run = next((r for r in runs if r.get("run_id") == run_id), None)
+    if run is None:
+        return HTMLResponse(
+            f"Run {run_id} not found in {story_id}.", status_code=404
+        )
+
+    return templates.TemplateResponse(
+        "run_detail.html",
+        {
+            "request": request,
+            "story_id": story_id,
+            "run": run,
+        },
     )

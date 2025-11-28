@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}New run – {{ story_id }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+
+{% block content %}
+<h1>Start new run ({{ story_id }})</h1>
+
+{% if models_error %}
+  <p style="color:red;">
+    Error talking to LM Studio: {{ models_error }}
+  </p>
+{% endif %}
+
+{% if not models %}
+  <p>No LM Studio models found. Is LM Studio running?</p>
+{% else %}
+  <form method="post" action="/story/{{ story_id }}/runs/start">
+    <p>
+      <label>
+        Model<br />
+        <select name="model_id" required>
+          {% for m in models %}
+            {% if m.type == "llm" %}
+              <option value="{{ m.id }}">
+                {{ m.id }} (ctx={{ m.max_context_length or "?" }}, quant={{ m.quantization }})
+              </option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </label>
+    </p>
+
+    <p>
+      <label>
+        Temperature<br />
+        <input type="number" name="temperature" value="0.8" step="0.05" />
+      </label>
+    </p>
+
+    <p>
+      <label>
+        Max tokens ceiling (per chapter)<br />
+        <input type="number" name="max_tokens_ceiling"
+               placeholder="leave blank to use 60% of model context" />
+      </label>
+    </p>
+
+    <p>
+      <label>
+        Default target words per chapter<br />
+        <input type="number" name="default_target_words"
+               value="{{ default_target_words }}" min="100" />
+      </label>
+    </p>
+
+    <p>
+      <label>
+        Voice (Piper .onnx)<br />
+        <select name="voice_model">
+          <option value="">(no TTS / placeholder)</option>
+          {% for v in voices %}
+            <option value="{{ v }}">{{ v.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </p>
+
+    <p>
+      <button type="submit">Start run</button>
+    </p>
+  </form>
+{% endif %}
+
+{% endblock %}

@@ -13,9 +13,9 @@
 {% block content %}
 <h1>Runs ({{ story_id }})</h1>
 
-<form method="post" action="/story/{{ story_id }}/runs/start">
-  <button type="submit">Start new run (using story_driver.py)</button>
-</form>
+<p>
+  <a href="/story/{{ story_id }}/runs/new">Start new run</a>
+</p>
 
 <h2>Existing runs</h2>
 <table>

@@ -1,7 +1,7 @@
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .config import TOKENS_PER_WORD, default_voices_dir
 from .story_io import load_story, save_story
@@ -18,17 +18,164 @@ from .metadata import (
     merge_metadata_into_story,
     build_previous_chapters_summary,
 )
-from .model import RunChapterInfo, RunInfo
+from .model import RunChapterInfo, RunInfo, RunSettings
 
+def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
+    """
+    Non-interactive: used by web UI and CLI wrapper.
 
-def run_story(story_path: Path) -> None:
+    - story_path: path to story.json
+    - settings: model/temp/tokens/words/voice
+    """
     story = load_story(story_path)
 
+    # bump story version
     story.setdefault("version_counter", 0)
     story["version_counter"] += 1
     version = story["version_counter"]
 
+    # also store the default_target_words in the story for future defaults
+    story["default_target_words"] = settings.default_target_words
+    default_target_words = settings.default_target_words
+
+    # timestamps + run dirs
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    run_id = f"run_{version:04d}_{ts}"
+    story_root = story_path.parent
+    run_dir = story_root / "runs" / run_id
+    chapters_dir = run_dir / "chapters"
+    audio_dir = run_dir / "audio"
+    for d in (run_dir, chapters_dir, audio_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    system_prompt = build_system_prompt(story)
+
+    outline = story.get("outline", {})
+    chapter_outlines = outline.get("chapters", [])
+
+    new_run_chapters: List[RunChapterInfo] = []
+
+    voice_path: Optional[Path] = (
+        Path(settings.voice_model) if settings.voice_model else None
+    )
+
+    for ch_outline in chapter_outlines:
+        ch_id = ch_outline["id"]
+        slug = ch_outline.get("slug", f"ch{ch_id:02d}")
+        title = ch_outline.get("title", f"Chapter {ch_id}")
+
+        chapter_target_words = int(
+            ch_outline.get("target_words", default_target_words)
+        )
+        ideal_tokens = int(chapter_target_words * TOKENS_PER_WORD)
+        per_chapter_max_tokens = min(ideal_tokens, settings.max_tokens_ceiling)
+
+        print(
+            f"\n=== Generating Chapter {ch_id}: {slug} ===\n"
+            f"Target words: {chapter_target_words}, "
+            f"ideal_tokens ≈ {ideal_tokens}, "
+            f"per_chapter_max_tokens = {per_chapter_max_tokens}"
+        )
+
+        previous_chapters_summary = build_previous_chapters_summary(
+            story, upto_chapter_id=ch_id
+        )
+
+        user_prompt = build_chapter_prompt(
+            story=story,
+            chapter_outline=ch_outline,
+            previous_chapters_summary=previous_chapters_summary,
+            target_words=chapter_target_words,
+        )
+
+        chapter_text, usage = generate_chapter(
+            model_id=settings.model_id,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=settings.temperature,
+            max_tokens=per_chapter_max_tokens,
+        )
+
+        chapter_filename = f"{slug}.md"
+        chapter_path = chapters_dir / chapter_filename
+        chapter_path.write_text(chapter_text, encoding="utf-8")
+
+        audio_filename = f"{slug}.wav"
+        audio_path = audio_dir / audio_filename
+        text_to_speech(chapter_text, audio_path, voice_path)
+
+        print("  [META] Analysing chapter metadata...")
+        meta = analyse_chapter_metadata(
+            model_id=settings.model_id,
+            story=story,
+            chapter_text=chapter_text,
+            chapter_outline=ch_outline,
+        )
+        merge_metadata_into_story(
+            story=story,
+            ch_id=ch_id,
+            slug=slug,
+            title=title,
+            meta=meta,
+        )
+
+        ch_info = RunChapterInfo(
+            chapter_id=ch_id,
+            chapter_slug=slug,
+            text_file=str(Path("chapters") / chapter_filename),
+            audio_file=str(Path("audio") / audio_filename),
+            usage=usage,
+        )
+        new_run_chapters.append(ch_info)
+
+        # Save after each chapter so we don't lose progress
+        save_story(story_path, story)
+
+    run_info = RunInfo(
+        run_id=run_id,
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        model_id=settings.model_id,
+        temperature=settings.temperature,
+        max_tokens_ceiling=settings.max_tokens_ceiling,
+        default_target_words=default_target_words,
+        voice_model=settings.voice_model,
+        chapters=new_run_chapters,
+    )
+
+    story.setdefault("runs", [])
+    story["runs"].append(asdict(run_info))
+
+    # Save updated story in root and in run dir
+    save_story(story_path, story)
+    save_story(run_dir / "story.json", story)
+
+    config = {
+        "run_id": run_id,
+        "model_id": settings.model_id,
+        "temperature": settings.temperature,
+        "max_tokens_ceiling": settings.max_tokens_ceiling,
+        "default_target_words": default_target_words,
+        "voice_model": settings.voice_model,
+        "tokens_per_word": TOKENS_PER_WORD,
+    }
+    (run_dir / "config.json").write_text(
+        __import__("json").dumps(config, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"\nRun complete: {run_id}")
+    print(f"Chapters in: {chapters_dir}")
+    print(f"Audio in: {audio_dir}")
+
+    return run_info
+
+def run_story(story_path: Path) -> None:
+    """
+    Interactive CLI wrapper: asks questions, then calls run_story_with_settings().
+    """
+    story = load_story(story_path)
     default_target_words = int(story.get("default_target_words", 2000))
+
     print(f"Default target words per chapter from story.json: {default_target_words}")
     tw_input = input(
         f"Override default target words per chapter [{default_target_words}]: "
@@ -60,130 +207,17 @@ def run_story(story_path: Path) -> None:
     use_tts = input("Generate audio (Piper)? [Y/n]: ").strip().lower()
     if use_tts in ("", "y", "yes"):
         voices_dir = default_voices_dir()
-        voice_model = choose_voice_model_interactive(voices_dir)
+        voice_model_path = choose_voice_model_interactive(voices_dir)
+        voice_model_str = str(voice_model_path) if voice_model_path else None
     else:
-        voice_model = None
+        voice_model_str = None
 
-    ts = time.strftime("%Y%m%dT%H%M%S")
-    run_id = f"run_{version:04d}_{ts}"
-    story_root = story_path.parent
-    run_dir = story_root / "runs" / run_id
-    chapters_dir = run_dir / "chapters"
-    audio_dir = run_dir / "audio"
-    for d in (run_dir, chapters_dir, audio_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    system_prompt = build_system_prompt(story)
-
-    outline = story.get("outline", {})
-    chapter_outlines = outline.get("chapters", [])
-
-    new_run_chapters: List[RunChapterInfo] = []
-
-    for ch_outline in chapter_outlines:
-        ch_id = ch_outline["id"]
-        slug = ch_outline.get("slug", f"ch{ch_id:02d}")
-        title = ch_outline.get("title", f"Chapter {ch_id}")
-
-        chapter_target_words = int(
-            ch_outline.get("target_words", default_target_words)
-        )
-        ideal_tokens = int(chapter_target_words * TOKENS_PER_WORD)
-        per_chapter_max_tokens = min(ideal_tokens, max_tokens_ceiling)
-
-        print(
-            f"\n=== Generating Chapter {ch_id}: {slug} ===\n"
-            f"Target words: {chapter_target_words}, "
-            f"ideal_tokens ≈ {ideal_tokens}, "
-            f"per_chapter_max_tokens = {per_chapter_max_tokens}"
-        )
-
-        previous_chapters_summary = build_previous_chapters_summary(
-            story, upto_chapter_id=ch_id
-        )
-
-        user_prompt = build_chapter_prompt(
-            story=story,
-            chapter_outline=ch_outline,
-            previous_chapters_summary=previous_chapters_summary,
-            target_words=chapter_target_words,
-        )
-
-        chapter_text, usage = generate_chapter(
-            model_id=model_id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=temperature,
-            max_tokens=per_chapter_max_tokens,
-        )
-
-        chapter_filename = f"{slug}.md"
-        chapter_path = chapters_dir / chapter_filename
-        chapter_path.write_text(chapter_text, encoding="utf-8")
-
-        audio_filename = f"{slug}.wav"
-        audio_path = audio_dir / audio_filename
-        text_to_speech(chapter_text, audio_path, voice_model)
-
-        print("  [META] Analysing chapter metadata...")
-        meta = analyse_chapter_metadata(
-            model_id=model_id,
-            story=story,
-            chapter_text=chapter_text,
-            chapter_outline=ch_outline,
-        )
-        merge_metadata_into_story(
-            story=story,
-            ch_id=ch_id,
-            slug=slug,
-            title=title,
-            meta=meta,
-        )
-
-        ch_info = RunChapterInfo(
-            chapter_id=ch_id,
-            chapter_slug=slug,
-            text_file=str(Path("chapters") / chapter_filename),
-            audio_file=str(Path("audio") / audio_filename),
-            usage=usage,
-        )
-        new_run_chapters.append(ch_info)
-
-        # Save after each chapter so we don't lose progress
-        save_story(story_path, story)
-
-    run_info = RunInfo(
-        run_id=run_id,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    settings = RunSettings(
         model_id=model_id,
         temperature=temperature,
         max_tokens_ceiling=max_tokens_ceiling,
         default_target_words=default_target_words,
-        voice_model=str(voice_model) if voice_model else None,
-        chapters=new_run_chapters,
+        voice_model=voice_model_str,
     )
 
-    story.setdefault("runs", [])
-    story["runs"].append(asdict(run_info))
-
-    # Save updated story in root and in run dir
-    save_story(story_path, story)
-    save_story(run_dir / "story.json", story)
-
-    config = {
-        "run_id": run_id,
-        "model_id": model_id,
-        "temperature": temperature,
-        "max_tokens_ceiling": max_tokens_ceiling,
-        "default_target_words": default_target_words,
-        "voice_model": str(voice_model) if voice_model else None,
-        "tokens_per_word": TOKENS_PER_WORD,
-    }
-    (run_dir / "config.json").write_text(
-        __import__("json").dumps(config, indent=2),
-        encoding="utf-8",
-    )
-
-    print(f"\nRun complete: {run_id}")
-    print(f"Chapters in: {chapters_dir}")
-    print(f"Audio in: {audio_dir}")
+    run_story_with_settings(story_path, settings)

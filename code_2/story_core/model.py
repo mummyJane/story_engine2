@@ -21,3 +21,13 @@ class RunInfo:
     default_target_words: int
     voice_model: Optional[str]
     chapters: List[RunChapterInfo]
+
+
+@dataclass
+class RunSettings:
+    model_id: str
+    temperature: float
+    max_tokens_ceiling: int
+    default_target_words: int
+    # full path to voice .onnx, or None
+    voice_model: Optional[str] = None
