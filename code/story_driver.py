@@ -92,9 +92,11 @@ def lmstudio_chat(
         "max_tokens": max_tokens,
         "stream": False,
     }
+    print(f"payload - {payload}")
     resp = requests.post(REST_CHAT, json=payload, timeout=60000)
     resp.raise_for_status()
     data = resp.json()
+    print(f"resp - {data}")
     return data
 
 
