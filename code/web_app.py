@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import subprocess
+import sys
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +15,7 @@ import json
 # Adjust as needed
 BASE_DIR = Path(__file__).parent
 DATA_ROOT = BASE_DIR / "data"
+driver_path = BASE_DIR.parent / "story_driver.py"
 
 app = FastAPI(title="Story Engine Web UI")
 
@@ -699,5 +703,43 @@ async def timeline_update(
     save_story(story_id, story)
     return RedirectResponse(
         url=f"/story/{story_id}/timeline",
+        status_code=303,
+    )
+
+@app.post("/story/{story_id}/runs/start")
+async def runs_start(story_id: str):
+    """
+    Start a new run by calling story_driver.py as a separate process.
+
+    For now this uses the interactive CLI behaviour of story_driver.py:
+    prompts will appear in the uvicorn console.
+    """
+    # Path to story.json
+    s_path = story_json_path(story_id)
+
+    # Adjust this if story_driver.py lives in a different folder
+    from pathlib import Path
+    BASE_DIR = Path(__file__).parent
+    driver_path = BASE_DIR / "story_driver.py"
+
+    if not driver_path.is_file():
+        return HTMLResponse(
+            f"story_driver.py not found at {driver_path}", status_code=500
+        )
+
+    # Fire off story_driver as a separate process so the HTTP request
+    # returns immediately and you can keep using the web UI.
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(driver_path),
+            str(s_path),
+        ],
+        cwd=str(BASE_DIR),
+    )
+
+    # Redirect back to the runs page – you can refresh later
+    return RedirectResponse(
+        url=f"/story/{story_id}/runs",
         status_code=303,
     )

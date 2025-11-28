@@ -92,7 +92,7 @@ def lmstudio_chat(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    resp = requests.post(REST_CHAT, json=payload, timeout=600)
+    resp = requests.post(REST_CHAT, json=payload, timeout=60000)
     resp.raise_for_status()
     data = resp.json()
     return data
@@ -153,19 +153,16 @@ def choose_voice_model_interactive(voices_dir: Path) -> Optional[Path]:
 
 def text_to_speech(text: str, out_path: Path, voice_model: Optional[Path]):
     """
-    Convert text → MP3 using Piper + ffmpeg.
+    Convert text → WAV using Piper only.
 
     - voice_model is a Path to a Piper .onnx file.
-    - out_path is the desired .mp3 path.
+    - out_path is the desired .wav path.
 
     If no voice_model is provided, we write a small placeholder file instead.
     """
     if voice_model is None:
-        out_path.write_bytes(b"MP3 PLACEHOLDER\n")
+        out_path.write_bytes(b"WAV PLACEHOLDER\n")
         return
-
-    # First generate a temporary WAV with Piper
-    wav_path = out_path.with_suffix(".wav")
 
     print(f"  [TTS] Using voice: {voice_model.name}")
     try:
@@ -175,56 +172,18 @@ def text_to_speech(text: str, out_path: Path, voice_model: Optional[Path]):
                 "-m",
                 str(voice_model),
                 "-f",
-                str(wav_path),
+                str(out_path),
             ],
             input=text.encode("utf-8"),
             check=True,
         )
     except FileNotFoundError:
         print("  [TTS] Piper not found on PATH. Writing placeholder instead.")
-        out_path.write_bytes(b"MP3 PLACEHOLDER (piper not found)\n")
-        return
+        out_path.write_bytes(b"WAV PLACEHOLDER (piper not found)\n")
     except subprocess.CalledProcessError as e:
         print(f"  [TTS] Piper failed ({e}). Writing placeholder instead.")
-        out_path.write_bytes(b"MP3 PLACEHOLDER (piper error)\n")
-        return
+        out_path.write_bytes(b"WAV PLACEHOLDER (piper error)\n")
 
-    # Then convert WAV → MP3 using ffmpeg
-    try:
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(wav_path),
-                str(out_path),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
-        print("  [TTS] ffmpeg not found on PATH. Leaving WAV only.")
-        try:
-            out_path.unlink()
-        except FileNotFoundError:
-            pass
-        wav_path.rename(out_path)
-        return
-    except subprocess.CalledProcessError as e:
-        print(f"  [TTS] ffmpeg failed ({e}). Leaving WAV only.")
-        try:
-            out_path.unlink()
-        except FileNotFoundError:
-            pass
-        wav_path.rename(out_path)
-        return
-
-    # Cleanup WAV if everything succeeded
-    try:
-        wav_path.unlink()
-    except FileNotFoundError:
-        pass
 
 
 # ---------- Story JSON helpers ----------
@@ -631,7 +590,7 @@ def run_story(story_path: Path):
         chapter_path.write_text(chapter_text, encoding="utf-8")
 
         # TTS
-        audio_filename = f"{slug}.mp3"
+        audio_filename = f"{slug}.wav"
         audio_path = audio_dir / audio_filename
         text_to_speech(chapter_text, audio_path, voice_model)
 

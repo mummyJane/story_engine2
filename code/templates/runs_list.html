@@ -1,10 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Runs – {{ story_id }}{% endblock %}
+
 {% block nav_extra %}
   <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/timeline">Timeline</a>
 {% endblock %}
+
 {% block content %}
 <h1>Runs ({{ story_id }})</h1>
+
+<form method="post" action="/story/{{ story_id }}/runs/start">
+  <button type="submit">Start new run (using story_driver.py)</button>
+</form>
+
+<h2>Existing runs</h2>
 <table>
   <tr><th>Run ID</th><th>Timestamp</th><th>Model</th><th>Temp</th><th>Chapters</th><th>Open</th></tr>
   {% for r in runs %}
