@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Items – {{ story_id }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+
+{% block content %}
+<h1>Items ({{ story_id }})</h1>
+
+<h2>Add new item</h2>
+<form method="post" action="/story/{{ story_id }}/items/add">
+  <p>
+    <label>
+      ID (machine id, e.g. <code>pink_sleeper</code>)<br />
+      <input type="text" name="item_id" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Name<br />
+      <input type="text" name="name" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Notes<br />
+      <textarea name="notes"></textarea>
+    </label>
+  </p>
+  <p>
+    <button type="submit">Add</button>
+  </p>
+</form>
+
+<h2>Existing items</h2>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Name</th>
+    <th>Notes</th>
+    <th>Update</th>
+  </tr>
+  {% for iid, it in items.items() %}
+    <tr>
+      <td>{{ iid }}</td>
+      <td>{{ it.name }}</td>
+      <td><pre>{{ it.notes }}</pre></td>
+      <td>
+        <form method="post" action="/story/{{ story_id }}/items/update">
+          <input type="hidden" name="item_id" value="{{ iid }}" />
+          <p>
+            <input type="text" name="name" value="{{ it.name }}" />
+          </p>
+          <p>
+            <textarea name="notes">{{ it.notes }}</textarea>
+          </p>
+          <p>
+            <button type="submit">Save</button>
+          </p>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr>
+      <td colspan="4">No items yet.</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endblock %}

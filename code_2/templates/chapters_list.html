@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Chapters – {{ story_id }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+  <a href="/story/{{ story_id }}/timeline">Timeline</a>
+{% endblock %}
+
+{% block content %}
+<h1>Chapters ({{ story_id }})</h1>
+
+<h2>Existing chapters</h2>
+<table>
+  <tr><th>ID</th><th>Slug</th><th>Title</th><th>Target words</th><th>Edit</th></tr>
+  {% for ch in chapters %}
+    <tr>
+      <td>{{ ch.id }}</td>
+      <td>{{ ch.slug }}</td>
+      <td>{{ ch.title }}</td>
+      <td>{{ ch.target_words or "" }}</td>
+      <td><a href="/story/{{ story_id }}/chapters/{{ ch.id }}">Edit</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No chapters defined.</td></tr>
+  {% endfor %}
+</table>
+
+<hr />
+
+<h2>Add new chapter</h2>
+<form method="post" action="/story/{{ story_id }}/chapters/add">
+  <p>
+    <label>
+      Title<br />
+      <input type="text" name="title" required style="width:100%;" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Slug (optional, default <code>chXX</code>)<br />
+      <input type="text" name="slug" style="width:100%;" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Target words<br />
+      <input type="number" name="target_words" value="2000" min="100" />
+    </label>
+  </p>
+  <p>
+    <label>
+      End hook<br />
+      <textarea name="end_hook"></textarea>
+    </label>
+  </p>
+  <p>
+    <label>
+      Beat summary (one per line)<br />
+      <textarea name="beats_text"></textarea>
+    </label>
+  </p>
+  <p>
+    <button type="submit">Create chapter</button>
+  </p>
+</form>
+{% endblock %}

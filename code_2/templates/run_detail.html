@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.run_id }} – {{ story_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+{% block content %}
+<h1>Run {{ run.run_id }}</h1>
+<ul>
+  <li>Timestamp: {{ run.timestamp }}</li>
+  <li>Model: {{ run.model_id }}</li>
+  <li>Temperature: {{ run.temperature }}</li>
+  <li>Default target words: {{ run.default_target_words }}</li>
+  <li>Voice model: {{ run.voice_model }}</li>
+</ul>
+
+<h2>Chapters</h2>
+<ul>
+  {% for ch in run.chapters %}
+    <li>
+      Chapter {{ ch.chapter_id }} – {{ ch.chapter_slug }}
+      [<a href="/story/{{ story_id }}/runs/{{ run.run_id }}/chapters/{{ ch.chapter_id }}">view</a>]
+    </li>
+  {% endfor %}
+</ul>
+{% endblock %}

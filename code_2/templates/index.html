@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Stories{% endblock %}
+{% block content %}
+<h1>Stories</h1>
+<ul>
+  {% for sid in stories %}
+    <li><a href="/story/{{ sid }}">{{ sid }}</a></li>
+  {% else %}
+    <li>No stories found in /data</li>
+  {% endfor %}
+</ul>
+
+<hr />
+
+<h2>Create new story</h2>
+<form method="post" action="/stories/create">
+  <p>
+    <label>
+      Story ID (folder name)<br />
+      <input type="text" name="story_id" placeholder="e.g. my_story" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Title<br />
+      <input type="text" name="title" placeholder="My Story Title" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Default target words per chapter<br />
+      <input type="number" name="default_target_words" value="2000" min="100" />
+    </label>
+  </p>
+  <p>
+    <button type="submit">Create story</button>
+  </p>
+</form>
+{% endblock %}

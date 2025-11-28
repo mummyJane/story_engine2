@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.run_id }} – Chapter {{ ch_info.chapter_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/runs/{{ run.run_id }}">Run</a>
+{% endblock %}
+{% block content %}
+<h1>Run {{ run.run_id }} – Chapter {{ ch_info.chapter_id }} ({{ ch_info.chapter_slug }})</h1>
+
+<h2>Audio</h2>
+<audio controls style="width:100%;">
+  <source src="{{ mp3_url }}" type="audio/mpeg" />
+  Your browser does not support audio.
+</audio>
+
+<h2>Summary / Metadata</h2>
+{% if chap_state %}
+  <p><strong>Title:</strong> {{ chap_state.title }}</p>
+  <p><strong>Summary:</strong></p>
+  <pre>{{ chap_state.summary }}</pre>
+  <p><strong>People:</strong> {{ chap_state.people }}</p>
+  <p><strong>Locations:</strong> {{ chap_state.locations }}</p>
+  <p><strong>Items:</strong> {{ chap_state.items }}</p>
+{% else %}
+  <p>No chapter_state entry found for this chapter.</p>
+{% endif %}
+
+<h3>Timeline events</h3>
+<ul>
+  {% for ev in events %}
+    <li>[{{ ev.id }}] {{ ev.summary }} ({{ ev.time_hint or "no time" }})</li>
+  {% else %}
+    <li>No events recorded for this chapter.</li>
+  {% endfor %}
+</ul>
+
+<h2>Usage</h2>
+<pre>{{ ch_info.usage | safe }}</pre>
+
+<h2>Chapter text</h2>
+<pre style="white-space: pre-wrap;">{{ chapter_text }}</pre>
+{% endblock %}

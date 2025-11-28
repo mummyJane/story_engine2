@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Story {{ story_id }}{% endblock %}
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+{% block content %}
+<h1>{{ story.title }} ({{ story_id }})</h1>
+
+<p>Version: {{ story.version_counter or 0 }}</p>
+
+<h2>World</h2>
+<ul>
+  <li>People: {{ world["people"] | length }}</li>
+  <li>Locations: {{ world["locations"] | length }}</li>
+  <li>Items: {{ world["items"] | length }}</li>
+</ul>
+
+<h2>Timeline</h2>
+<p>Total events: {{ story["timeline"] | length }}</p>
+<p><a href="/story/{{ story_id }}/timeline">View / edit timeline</a></p>
+
+<h2>Chapters</h2>
+<p><a href="/story/{{ story_id }}/chapters">View / edit chapters</a></p>
+
+<h2>Runs</h2>
+<p><a href="/story/{{ story_id }}/runs">View runs</a></p>
+{% endblock %}

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Timeline – {{ story_id }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+
+{% block content %}
+<h1>Timeline ({{ story_id }})</h1>
+
+<h2>Add event</h2>
+<form method="post" action="/story/{{ story_id }}/timeline/add">
+  <p>
+    <label>
+      Summary<br />
+      <input type="text" name="summary" required style="width:100%;" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Time hint (e.g. <code>Day 1 – morning</code>)<br />
+      <input type="text" name="time_hint" style="width:100%;" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Chapter ID (optional)<br />
+      <input type="number" name="chapter_id" min="1" />
+    </label>
+  </p>
+  <p>
+    <button type="submit">Add event</button>
+  </p>
+</form>
+
+<h2>Existing events</h2>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Summary</th>
+    <th>Time hint</th>
+    <th>Chapter</th>
+    <th>Update</th>
+  </tr>
+  {% for ev in timeline %}
+    <tr>
+      <td>{{ ev.id }}</td>
+      <td>{{ ev.summary }}</td>
+      <td>{{ ev.time_hint or "" }}</td>
+      <td>
+        {% if ev.chapter_id is defined %}
+          Chapter {{ ev.chapter_id }}
+          {% if chapter_titles[ev.chapter_id] is defined %}
+            – {{ chapter_titles[ev.chapter_id] }}
+          {% endif %}
+        {% else %}
+          (none)
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="/story/{{ story_id }}/timeline/update">
+          <input type="hidden" name="ev_id" value="{{ ev.id }}" />
+          <p>
+            <label>
+              Summary<br />
+              <input type="text" name="summary" value="{{ ev.summary }}" style="width:100%;" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Time hint<br />
+              <input type="text" name="time_hint" value="{{ ev.time_hint or '' }}" style="width:100%;" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Chapter ID<br />
+              <input type="number" name="chapter_id"
+                     value="{% if ev.chapter_id is defined %}{{ ev.chapter_id }}{% endif %}" min="1" />
+            </label>
+          </p>
+          <p>
+            <button type="submit">Save</button>
+          </p>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr>
+      <td colspan="5">No events yet.</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endblock %}

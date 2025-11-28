@@ -3,6 +3,8 @@
 /Data
 /code/voices
 /code/Data
+/code_2/voices
+/code_2/Data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
