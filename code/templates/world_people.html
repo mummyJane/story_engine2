@@ -1,40 +1,113 @@
 {% extends "base.html" %}
 {% block title %}People – {{ story_id }}{% endblock %}
+
 {% block nav_extra %}
   <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/locations">Locations</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
 {% endblock %}
+
 {% block content %}
 <h1>People ({{ story_id }})</h1>
 
 <h2>Add new person</h2>
 <form method="post" action="/story/{{ story_id }}/people/add">
-  <label>ID: <input type="text" name="person_id" /></label><br />
-  <label>Name: <input type="text" name="name" /></label><br />
-  <label>Notes:<br />
-    <textarea name="notes"></textarea>
-  </label><br />
-  <button type="submit">Add</button>
+  <p>
+    <label>
+      ID (machine id, e.g. <code>daniel</code>)<br />
+      <input type="text" name="person_id" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Name<br />
+      <input type="text" name="name" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Age<br />
+      <input type="number" name="age" min="0" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Tags (comma-separated, e.g. <code>reporter, wheelchair, mis-registered</code>)<br />
+      <input type="text" name="tags" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Notes<br />
+      <textarea name="notes"></textarea>
+    </label>
+  </p>
+  <p>
+    <button type="submit">Add</button>
+  </p>
 </form>
 
-<h2>Existing</h2>
+<h2>Existing people</h2>
 <table>
-  <tr><th>ID</th><th>Name</th><th>Notes</th><th>Update</th></tr>
+  <tr>
+    <th>ID</th>
+    <th>Name</th>
+    <th>Age</th>
+    <th>Tags</th>
+    <th>Notes</th>
+    <th>Update</th>
+  </tr>
   {% for pid, p in people.items() %}
     <tr>
       <td>{{ pid }}</td>
       <td>{{ p.name }}</td>
+      <td>{{ p.age or "" }}</td>
+      <td>
+        {% if p.tags %}
+          {{ p.tags | join(", ") }}
+        {% endif %}
+      </td>
       <td><pre>{{ p.notes }}</pre></td>
       <td>
         <form method="post" action="/story/{{ story_id }}/people/update">
           <input type="hidden" name="person_id" value="{{ pid }}" />
-          <input type="text" name="name" value="{{ p.name }}" /><br />
-          <textarea name="notes">{{ p.notes }}</textarea><br />
-          <button type="submit">Save</button>
+          <p>
+            <label>
+              Name<br />
+              <input type="text" name="name" value="{{ p.name }}" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Age<br />
+              <input type="number" name="age" value="{{ p.age or '' }}" min="0" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Tags (comma-separated)<br />
+              <input type="text" name="tags"
+                     value="{% if p.tags %}{{ p.tags | join(', ') }}{% endif %}" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Notes<br />
+              <textarea name="notes">{{ p.notes }}</textarea>
+            </label>
+          </p>
+          <p>
+            <button type="submit">Save</button>
+          </p>
         </form>
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="4">No people yet.</td></tr>
+    <tr>
+      <td colspan="6">No people yet.</td>
+    </tr>
   {% endfor %}
 </table>
 {% endblock %}

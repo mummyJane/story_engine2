@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Locations – {{ story_id }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/story/{{ story_id }}">Overview</a>
+  <a href="/story/{{ story_id }}/people">People</a>
+  <a href="/story/{{ story_id }}/items">Items</a>
+  <a href="/story/{{ story_id }}/chapters">Chapters</a>
+  <a href="/story/{{ story_id }}/runs">Runs</a>
+{% endblock %}
+
+{% block content %}
+<h1>Locations ({{ story_id }})</h1>
+
+<h2>Add new location</h2>
+<form method="post" action="/story/{{ story_id }}/locations/add">
+  <p>
+    <label>
+      ID (machine id, e.g. <code>unit_1_babies</code>)<br />
+      <input type="text" name="loc_id" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Name<br />
+      <input type="text" name="name" required />
+    </label>
+  </p>
+  <p>
+    <label>
+      Type (e.g. ward, classroom, office, garden)<br />
+      <input type="text" name="loc_type" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Notes<br />
+      <textarea name="notes"></textarea>
+    </label>
+  </p>
+  <p>
+    <button type="submit">Add</button>
+  </p>
+</form>
+
+<h2>Existing locations</h2>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Name</th>
+    <th>Type</th>
+    <th>Notes</th>
+    <th>Update</th>
+  </tr>
+  {% for lid, loc in locations.items() %}
+    <tr>
+      <td>{{ lid }}</td>
+      <td>{{ loc.name }}</td>
+      <td>{{ loc.type }}</td>
+      <td><pre>{{ loc.notes }}</pre></td>
+      <td>
+        <form method="post" action="/story/{{ story_id }}/locations/update">
+          <input type="hidden" name="loc_id" value="{{ lid }}" />
+          <p>
+            <label>
+              Name<br />
+              <input type="text" name="name" value="{{ loc.name }}" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Type<br />
+              <input type="text" name="loc_type" value="{{ loc.type }}" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Notes<br />
+              <textarea name="notes">{{ loc.notes }}</textarea>
+            </label>
+          </p>
+          <p>
+            <button type="submit">Save</button>
+          </p>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr>
+      <td colspan="5">No locations yet.</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endblock %}

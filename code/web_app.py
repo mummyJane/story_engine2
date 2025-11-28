@@ -102,6 +102,13 @@ async def world_people(request: Request, story_id: str):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     people = world.setdefault("people", {})
+
+    # Normalise entries so template can safely read age/tags/notes
+    for pid, pdata in people.items():
+        pdata.setdefault("age", None)
+        pdata.setdefault("tags", [])
+        pdata.setdefault("notes", "")
+
     return templates.TemplateResponse(
         "world_people.html",
         {
@@ -111,19 +118,35 @@ async def world_people(request: Request, story_id: str):
         },
     )
 
-
 @app.post("/story/{story_id}/people/add")
 async def world_people_add(
     story_id: str,
     person_id: str = Form(...),
     name: str = Form(...),
+    age: Optional[str] = Form(None),
+    tags: str = Form(""),
     notes: str = Form(""),
 ):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     people = world.setdefault("people", {})
+
     if person_id:
-        people[person_id] = {"name": name, "notes": notes}
+        pdata: Dict[str, Any] = {
+            "name": name,
+            "notes": notes,
+            "tags": parse_tags(tags),
+        }
+        if age:
+            try:
+                pdata["age"] = int(age)
+            except ValueError:
+                pdata["age"] = None
+        else:
+            pdata["age"] = None
+
+        people[person_id] = pdata
+
     save_story(story_id, story)
     return RedirectResponse(
         url=f"/story/{story_id}/people", status_code=303
@@ -135,14 +158,28 @@ async def world_people_update(
     story_id: str,
     person_id: str = Form(...),
     name: str = Form(...),
+    age: Optional[str] = Form(None),
+    tags: str = Form(""),
     notes: str = Form(""),
 ):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     people = world.setdefault("people", {})
+
     if person_id in people:
-        people[person_id]["name"] = name
-        people[person_id]["notes"] = notes
+        pdata = people[person_id]
+        pdata["name"] = name
+        pdata["notes"] = notes
+        pdata["tags"] = parse_tags(tags)
+
+        if age:
+            try:
+                pdata["age"] = int(age)
+            except ValueError:
+                pdata["age"] = None
+        else:
+            pdata["age"] = None
+
     save_story(story_id, story)
     return RedirectResponse(
         url=f"/story/{story_id}/people", status_code=303
@@ -156,6 +193,12 @@ async def world_locations(request: Request, story_id: str):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     locations = world.setdefault("locations", {})
+
+    # Normalise location entries so template can rely on 'type' and 'notes'
+    for lid, loc in locations.items():
+        loc.setdefault("type", "")
+        loc.setdefault("notes", "")
+
     return templates.TemplateResponse(
         "world_locations.html",
         {
@@ -171,13 +214,20 @@ async def world_locations_add(
     story_id: str,
     loc_id: str = Form(...),
     name: str = Form(...),
+    loc_type: str = Form(""),
     notes: str = Form(""),
 ):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     locations = world.setdefault("locations", {})
+
     if loc_id:
-        locations[loc_id] = {"name": name, "notes": notes}
+        locations[loc_id] = {
+            "name": name,
+            "type": loc_type,
+            "notes": notes,
+        }
+
     save_story(story_id, story)
     return RedirectResponse(
         url=f"/story/{story_id}/locations", status_code=303
@@ -189,14 +239,19 @@ async def world_locations_update(
     story_id: str,
     loc_id: str = Form(...),
     name: str = Form(...),
+    loc_type: str = Form(""),
     notes: str = Form(""),
 ):
     story = load_story(story_id)
     world = story.setdefault("world", {})
     locations = world.setdefault("locations", {})
+
     if loc_id in locations:
-        locations[loc_id]["name"] = name
-        locations[loc_id]["notes"] = notes
+        loc = locations[loc_id]
+        loc["name"] = name
+        loc["type"] = loc_type
+        loc["notes"] = notes
+
     save_story(story_id, story)
     return RedirectResponse(
         url=f"/story/{story_id}/locations", status_code=303
@@ -489,3 +544,7 @@ async def create_story(
         url=f"/story/{story_id}",
         status_code=303,
     )
+
+def parse_tags(s: str) -> List[str]:
+    """Split a comma-separated tags string into a clean list."""
+    return [t.strip() for t in s.split(",") if t.strip()]
