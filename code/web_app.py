@@ -81,6 +81,7 @@ async def story_overview(request: Request, story_id: str):
 
     chapters_state = story.setdefault("chapters_state", [])
     runs = story.setdefault("runs", [])
+    story.setdefault("timeline", [])  # <--- add this line
 
     return templates.TemplateResponse(
         "story_overview.html",
@@ -329,7 +330,56 @@ async def chapters_list(request: Request, story_id: str):
     )
 
 
-@app.get("/story/{story_id}/chapters/{chapter_id}", response_class=HTMLResponse)
+# ADD CHAPTER (no chapter_id here!)
+@app.post("/story/{story_id}/chapters/add")
+async def chapters_add(
+    story_id: str,
+    title: str = Form(...),
+    slug: str = Form(""),
+    target_words: str = Form("2000"),  # string, we parse ourselves
+    end_hook: str = Form(""),
+    beats_text: str = Form(""),
+):
+    story = load_story(story_id)
+    outline = story.setdefault("outline", {})
+    chapters = outline.setdefault("chapters", [])
+
+    # Next ID = max existing id + 1
+    next_id = 1 + max((int(c.get("id", 0)) for c in chapters), default=0)
+
+    if not slug:
+        slug = f"ch{next_id:02d}"
+
+    # Safe parse of target_words
+    default_tw = int(story.get("default_target_words", 2000))
+    try:
+        tw_val = int(target_words) if target_words.strip() else default_tw
+    except ValueError:
+        tw_val = default_tw
+
+    beats = [b.strip() for b in beats_text.splitlines() if b.strip()]
+
+    new_chapter = {
+        "id": next_id,
+        "slug": slug,
+        "title": title,
+        "target_words": tw_val,
+        "end_hook": end_hook,
+        "beat_summary": beats,
+    }
+    chapters.append(new_chapter)
+
+    save_story(story_id, story)
+
+    # Go straight to edit page for that chapter
+    return RedirectResponse(
+        url=f"/story/{story_id}/chapters/{next_id}",
+        status_code=303,
+    )
+
+
+# EDIT CHAPTER – note the :int in the path
+@app.get("/story/{story_id}/chapters/{chapter_id:int}", response_class=HTMLResponse)
 async def chapter_edit(
     request: Request,
     story_id: str,
@@ -338,9 +388,8 @@ async def chapter_edit(
     story = load_story(story_id)
     outline = story.setdefault("outline", {})
     chapters = outline.setdefault("chapters", [])
-    chapter = next((c for c in chapters if c.get("id") == chapter_id), None)
+    chapter = next((c for c in chapters if int(c.get("id", 0)) == chapter_id), None)
     if chapter is None:
-        # simple 404-ish
         return HTMLResponse(
             f"Chapter {chapter_id} not found in {story_id}.", status_code=404
         )
@@ -357,13 +406,14 @@ async def chapter_edit(
     )
 
 
-@app.post("/story/{story_id}/chapters/{chapter_id}")
+# UPDATE CHAPTER – same :int in the path
+@app.post("/story/{story_id}/chapters/{chapter_id:int}")
 async def chapter_update(
     story_id: str,
     chapter_id: int,
     title: str = Form(...),
     slug: str = Form(...),
-    target_words: int = Form(...),
+    target_words: str = Form("2000"),
     end_hook: str = Form(""),
     beats_text: str = Form(""),
 ):
@@ -371,25 +421,31 @@ async def chapter_update(
     outline = story.setdefault("outline", {})
     chapters = outline.setdefault("chapters", [])
 
-    chapter = next((c for c in chapters if c.get("id") == chapter_id), None)
+    chapter = next((c for c in chapters if int(c.get("id", 0)) == chapter_id), None)
     if chapter is None:
         return HTMLResponse(
             f"Chapter {chapter_id} not found in {story_id}.", status_code=404
         )
 
+    default_tw = int(story.get("default_target_words", 2000))
+    try:
+        tw_val = int(target_words) if target_words.strip() else default_tw
+    except ValueError:
+        tw_val = default_tw
+
     chapter["title"] = title
     chapter["slug"] = slug
-    chapter["target_words"] = int(target_words)
+    chapter["target_words"] = tw_val
     chapter["end_hook"] = end_hook
-
-    beats = [b.strip() for b in beats_text.splitlines() if b.strip()]
-    chapter["beat_summary"] = beats
+    chapter["beat_summary"] = [
+        b.strip() for b in beats_text.splitlines() if b.strip()
+    ]
 
     save_story(story_id, story)
     return RedirectResponse(
-        url=f"/story/{story_id}/chapters/{chapter_id}", status_code=303
+        url=f"/story/{story_id}/chapters/{chapter_id}",
+        status_code=303
     )
-
 
 # ----- Runs -----
 
@@ -548,3 +604,100 @@ async def create_story(
 def parse_tags(s: str) -> List[str]:
     """Split a comma-separated tags string into a clean list."""
     return [t.strip() for t in s.split(",") if t.strip()]
+
+@app.get("/story/{story_id}/timeline", response_class=HTMLResponse)
+async def story_timeline(request: Request, story_id: str):
+    story = load_story(story_id)
+    timeline = story.setdefault("timeline", [])
+
+    # Build a map of chapter_id -> title for display
+    chapter_titles: Dict[int, str] = {}
+
+    chapters_state = story.get("chapters_state", [])
+    for cs in chapters_state:
+        cid = cs.get("id")
+        if isinstance(cid, int):
+            chapter_titles[cid] = cs.get("title", f"Chapter {cid}")
+
+    outline = story.get("outline", {})
+    for ch in outline.get("chapters", []):
+        cid = ch.get("id")
+        if isinstance(cid, int) and cid not in chapter_titles:
+            chapter_titles[cid] = ch.get("title", f"Chapter {cid}")
+
+    # Sort timeline by id string for now
+    timeline_sorted = sorted(
+        timeline,
+        key=lambda ev: str(ev.get("id", ""))
+    )
+
+    return templates.TemplateResponse(
+        "timeline.html",
+        {
+            "request": request,
+            "story_id": story_id,
+            "timeline": timeline_sorted,
+            "chapter_titles": chapter_titles,
+        },
+    )
+
+
+@app.post("/story/{story_id}/timeline/add")
+async def timeline_add(
+    story_id: str,
+    summary: str = Form(...),
+    time_hint: str = Form(""),
+    chapter_id: str = Form(""),
+):
+    story = load_story(story_id)
+    timeline = story.setdefault("timeline", [])
+
+    ev_id = f"ev_{len(timeline) + 1:04d}"
+
+    event: Dict[str, Any] = {
+        "id": ev_id,
+        "summary": summary,
+        "time_hint": time_hint or None,
+    }
+    if chapter_id.strip():
+        try:
+            event["chapter_id"] = int(chapter_id)
+        except ValueError:
+            pass  # ignore bad chapter_id input
+
+    timeline.append(event)
+    save_story(story_id, story)
+
+    return RedirectResponse(
+        url=f"/story/{story_id}/timeline",
+        status_code=303,
+    )
+
+
+@app.post("/story/{story_id}/timeline/update")
+async def timeline_update(
+    story_id: str,
+    ev_id: str = Form(...),
+    summary: str = Form(...),
+    time_hint: str = Form(""),
+    chapter_id: str = Form(""),
+):
+    story = load_story(story_id)
+    timeline = story.setdefault("timeline", [])
+
+    for ev in timeline:
+        if ev.get("id") == ev_id:
+            ev["summary"] = summary
+            ev["time_hint"] = time_hint or None
+            if chapter_id.strip():
+                try:
+                    ev["chapter_id"] = int(chapter_id)
+                except ValueError:
+                    pass
+            break
+
+    save_story(story_id, story)
+    return RedirectResponse(
+        url=f"/story/{story_id}/timeline",
+        status_code=303,
+    )

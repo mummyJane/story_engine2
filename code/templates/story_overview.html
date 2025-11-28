@@ -19,6 +19,10 @@
   <li>Items: {{ world["items"] | length }}</li>
 </ul>
 
+<h2>Timeline</h2>
+<p>Total events: {{ story["timeline"] | length }}</p>
+<p><a href="/story/{{ story_id }}/timeline">View / edit timeline</a></p>
+
 <h2>Chapters</h2>
 <p><a href="/story/{{ story_id }}/chapters">View / edit chapters</a></p>
 
