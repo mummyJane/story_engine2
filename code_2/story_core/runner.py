@@ -2,6 +2,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
+import copy
 
 from .config import TOKENS_PER_WORD, default_voices_dir
 from .story_io import load_story, save_story
@@ -24,29 +25,53 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     """
     Non-interactive: used by web UI and CLI wrapper.
 
-    - story_path: path to story.json
+    - story_path: path to base data/<story_id>/story.json (read-only)
     - settings: model/temp/tokens/words/voice
+
+    The base story.json is NOT modified. A copy with updated metadata is
+    written into data/<story_id>/runs/<run_id>/story.json.
     """
-    story = load_story(story_path)
+    base_story = load_story(story_path)
 
-    # bump story version
-    story.setdefault("version_counter", 0)
-    story["version_counter"] += 1
-    version = story["version_counter"]
+    story_root = story_path.parent
+    runs_root = story_root / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
 
-    # also store the default_target_words in the story for future defaults
+    # Find next run index from existing run_* directories
+    max_index = 0
+    for d in runs_root.iterdir():
+        if not d.is_dir():
+            continue
+        name = d.name
+        if not name.startswith("run_"):
+            continue
+        parts = name.split("_", 2)
+        if len(parts) < 2:
+            continue
+        idx_str = parts[1]
+        if idx_str.isdigit():
+            max_index = max(max_index, int(idx_str))
+
+    next_index = max_index + 1
+
+    # Working copy of the story for THIS run only
+    story = copy.deepcopy(base_story)
+
+    # Default target words for this run
     story["default_target_words"] = settings.default_target_words
     default_target_words = settings.default_target_words
 
     # timestamps + run dirs
     ts = time.strftime("%Y%m%dT%H%M%S")
-    run_id = f"run_{version:04d}_{ts}"
-    story_root = story_path.parent
-    run_dir = story_root / "runs" / run_id
+    run_id = f"run_{next_index:04d}_{ts}"
+    run_dir = runs_root / run_id
     chapters_dir = run_dir / "chapters"
     audio_dir = run_dir / "audio"
     for d in (run_dir, chapters_dir, audio_dir):
         d.mkdir(parents=True, exist_ok=True)
+
+    # This is the ONLY story.json we will write
+    run_story_path = run_dir / "story.json"
 
     system_prompt = build_system_prompt(story)
 
@@ -128,8 +153,8 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
         )
         new_run_chapters.append(ch_info)
 
-        # Save after each chapter so we don't lose progress
-        save_story(story_path, story)
+        # Save after each chapter so we don't lose progress (to run copy only)
+        save_story(run_story_path, story)
 
     run_info = RunInfo(
         run_id=run_id,
@@ -142,15 +167,17 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
         chapters=new_run_chapters,
     )
 
+    # Attach THIS run's info to THIS run's story.json only
     story.setdefault("runs", [])
     story["runs"].append(asdict(run_info))
 
-    # Save updated story in root and in run dir
-    save_story(story_path, story)
-    save_story(run_dir / "story.json", story)
+    # Final save of run story
+    save_story(run_story_path, story)
 
+    # Config for quick view
     config = {
         "run_id": run_id,
+        "timestamp": run_info.timestamp,
         "model_id": settings.model_id,
         "temperature": settings.temperature,
         "max_tokens_ceiling": settings.max_tokens_ceiling,
@@ -166,6 +193,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     print(f"\nRun complete: {run_id}")
     print(f"Chapters in: {chapters_dir}")
     print(f"Audio in: {audio_dir}")
+    print(f"Run story JSON: {run_story_path}")
 
     return run_info
 

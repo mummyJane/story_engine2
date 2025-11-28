@@ -66,6 +66,55 @@ def list_stories() -> List[str]:
             stories.append(d.name)
     return sorted(stories)
 
+def runs_root(story_id: str) -> Path:
+    return story_dir(story_id) / "runs"
+
+
+def load_run_story(story_id: str, run_id: str) -> dict:
+    rdir = runs_root(story_id) / run_id
+    path = rdir / "story.json"
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def list_runs_for_story(story_id: str) -> list[dict]:
+    """
+    Scan data/<story_id>/runs/*/story.json and return a list of run dicts
+    (RunInfo-like) for the UI.
+    """
+    root = runs_root(story_id)
+    if not root.is_dir():
+        return []
+
+    runs: list[dict] = []
+
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        run_id = d.name
+        story_path = d / "story.json"
+        if not story_path.is_file():
+            continue
+
+        with story_path.open("r", encoding="utf-8") as f:
+            s = json.load(f)
+
+        rlist = s.get("runs", [])
+        run_entry = next((r for r in rlist if r.get("run_id") == run_id), None)
+        if run_entry is None and rlist:
+            # Fallback: single run, no id match
+            run_entry = rlist[0]
+            run_entry.setdefault("run_id", run_id)
+        elif run_entry is None:
+            run_entry = {"run_id": run_id}
+
+        runs.append(run_entry)
+
+    # Sort by timestamp if present, else by run_id
+    runs.sort(key=lambda r: r.get("timestamp", r["run_id"]))
+    return runs
 
 # ---------- Routes ----------
 
@@ -461,8 +510,7 @@ async def chapter_update(
 
 @app.get("/story/{story_id}/runs", response_class=HTMLResponse)
 async def runs_list(request: Request, story_id: str):
-    story = load_story(story_id)
-    runs = story.get("runs", [])
+    runs = list_runs_for_story(story_id)
     return templates.TemplateResponse(
         "runs_list.html",
         {
@@ -472,58 +520,65 @@ async def runs_list(request: Request, story_id: str):
         },
     )
 
-
-
-
-@app.get(
-    "/story/{story_id}/runs/{run_id}/chapters/{chapter_id}",
-    response_class=HTMLResponse,
-)
+@app.get("/story/{story_id}/runs/{run_id}/chapters/{index}", response_class=HTMLResponse)
 async def run_chapter_detail(
     request: Request,
     story_id: str,
     run_id: str,
-    chapter_id: int,
+    index: int,
 ):
-    story = load_story(story_id)
-    runs = story.get("runs", [])
-    run = next((r for r in runs if r.get("run_id") == run_id), None)
-    if run is None:
+    print(f"Request - {request} story_id - {story_id} run_id - {run_id} index - {index}")
+    try:
+        s = load_run_story(story_id, run_id)
+    except FileNotFoundError:
         return HTMLResponse(
-            f"Run {run_id} not found.", status_code=404
+            f"Run {run_id} not found for story {story_id}.",
+            status_code=404,
         )
+
+    rlist = s.get("runs", [])
+    run = next((r for r in rlist if r.get("run_id") == run_id), None)
+    if run is None:
+        if not rlist:
+            return HTMLResponse(
+                f"Run {run_id} not found for story {story_id}.",
+                status_code=404,
+            )
+        run = rlist[0]
 
     run_chapters = run.get("chapters", [])
     ch_info = next(
-        (c for c in run_chapters if c.get("chapter_id") == chapter_id), None
+        (c for c in run_chapters if c.get("chapter_id") == index), None
     )
     if ch_info is None:
         return HTMLResponse(
-            f"Chapter {chapter_id} not in run {run_id}.", status_code=404
+            f"Chapter {index} not in run {run_id}.", status_code=404
         )
 
-    # Load chapter text from file
-    rel_text_path = Path(ch_info["text_file"])
-    full_text_path = story_dir(story_id) / "runs" / run_id / rel_text_path
-    chapter_text = ""
-    if full_text_path.is_file():
-        chapter_text = full_text_path.read_text(encoding="utf-8")
+    print(f"ch_info - {ch_info}")
+    # Load chapter text from run folder
+    rel_text = Path(ch_info["text_file"])  # e.g. "chapters/ch01-something.md"
+    text_path = runs_root(story_id) / run_id / rel_text
+    if text_path.is_file():
+        chapter_text = text_path.read_text(encoding="utf-8")
+    else:
+        chapter_text = "(chapter text file not found)"
 
     # Summary / metadata from chapters_state
-    chapters_state = story.get("chapters_state", [])
+    chapters_state = s.get("chapters_state", [])
     chap_state = next(
-        (cs for cs in chapters_state if cs.get("id") == chapter_id), None
+        (cs for cs in chapters_state if cs.get("id") == index), None
     )
 
     # Timeline events for this chapter
-    timeline = story.get("timeline", [])
+    timeline = s.get("timeline", [])
     chapter_events = [
-        ev for ev in timeline if ev.get("chapter_id") == chapter_id
+        ev for ev in timeline if ev.get("chapter_id") == index
     ]
 
-    # MP3 URL
-    rel_audio_path = Path(ch_info["audio_file"])
-    mp3_url = f"/data/{story_id}/runs/{run_id}/{rel_audio_path.as_posix()}"
+    # Build audio URL (WAV)
+    rel_audio = Path(ch_info["audio_file"])
+    audio_url = f"/data/{story_id}/runs/{run_id}/{rel_audio.as_posix()}"
 
     return templates.TemplateResponse(
         "run_chapter_detail.html",
@@ -535,7 +590,7 @@ async def run_chapter_detail(
             "chapter_text": chapter_text,
             "chap_state": chap_state,
             "events": chapter_events,
-            "mp3_url": mp3_url,
+            "audio_url": audio_url,
         },
     )
 
@@ -777,18 +832,25 @@ async def runs_start(
     )
 
 @app.get("/story/{story_id}/runs/{run_id}", response_class=HTMLResponse)
-async def run_detail(
-    request: Request,
-    story_id: str,
-    run_id: str,
-):
-    story = load_story(story_id)
-    runs = story.get("runs", [])
-    run = next((r for r in runs if r.get("run_id") == run_id), None)
-    if run is None:
+async def run_detail(request: Request, story_id: str, run_id: str):
+    try:
+        s = load_run_story(story_id, run_id)
+    except FileNotFoundError:
         return HTMLResponse(
-            f"Run {run_id} not found in {story_id}.", status_code=404
+            f"Run {run_id} not found for story {story_id}.",
+            status_code=404,
         )
+
+    rlist = s.get("runs", [])
+    run = next((r for r in rlist if r.get("run_id") == run_id), None)
+    if run is None:
+        if not rlist:
+            return HTMLResponse(
+                f"Run {run_id} not found for story {story_id}.",
+                status_code=404,
+            )
+        run = rlist[0]
+        run.setdefault("run_id", run_id)
 
     return templates.TemplateResponse(
         "run_detail.html",
