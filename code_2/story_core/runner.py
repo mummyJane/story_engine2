@@ -32,7 +32,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     Non-interactive: used by web UI and CLI wrapper.
 
     - story_path: path to base data/<story_id>/story.json (read-only)
-    - settings: model/temp/tokens/words/voice
+    - settings: model/temp/tokens/words/voice/image
 
     The base story.json is NOT modified. A copy with updated metadata is
     written into data/<story_id>/runs/<run_id>/story.json.
@@ -41,17 +41,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
 
     story_root = story_path.parent
     runs_root = story_root / "runs"
-    images_dir = run_dir / "images"
-    events_img_dir = images_dir / "events"
-
     runs_root.mkdir(parents=True, exist_ok=True)
-    images_dir.mkdir(parents=True, exist_ok=True)
-    events_img_dir.mkdir(parents=True, exist_ok=True)
-
-    images_meta = {
-        "chapters": {},
-        "events": {}
-    }
 
     # Find next run index from existing run_* directories
     max_index = 0
@@ -83,7 +73,9 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     run_dir = runs_root / run_id
     chapters_dir = run_dir / "chapters"
     audio_dir = run_dir / "audio"
-    for d in (run_dir, chapters_dir, audio_dir):
+    images_dir = run_dir / "images"
+    events_img_dir = images_dir / "events"
+    for d in (run_dir, chapters_dir, audio_dir, images_dir, events_img_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     # This is the ONLY story.json we will write
@@ -99,6 +91,14 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     voice_path: Optional[Path] = (
         Path(settings.voice_model) if settings.voice_model else None
     )
+
+    # Image metadata structure to attach at end
+    images_meta = {
+        "chapters": {},  # chapter_id(str) -> {"start": path, "end": path}
+        "events": {},    # event_id -> path
+    }
+
+    img_settings = settings.image_settings
 
     for ch_outline in chapter_outlines:
         ch_id = ch_outline["id"]
@@ -118,11 +118,12 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
             f"per_chapter_max_tokens = {per_chapter_max_tokens}"
         )
 
-        if settings.image_settings and settings.image_settings.enabled:
+        # --- Chapter start image ---
+        if img_settings and img_settings.enabled:
             start_prompt = build_image_prompt_for_chapter_start(story, ch_outline)
             start_name = f"ch{ch_id:02d}-start.png"
             start_path = images_dir / start_name
-            generate_image(start_prompt, start_path, settings.image_settings)
+            generate_image(start_prompt, start_path, img_settings)
 
             images_meta["chapters"].setdefault(str(ch_id), {})["start"] = \
                 f"images/{start_name}"
@@ -169,14 +170,27 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
             meta=meta,
         )
 
-        if settings.image_settings and settings.image_settings.enabled:
+        # --- Chapter end image ---
+        if img_settings and img_settings.enabled:
             end_prompt = build_image_prompt_for_chapter_end(story, ch_outline, meta)
             end_name = f"ch{ch_id:02d}-end.png"
             end_path = images_dir / end_name
-            generate_image(end_prompt, end_path, settings.image_settings)
+            generate_image(end_prompt, end_path, img_settings)
 
             images_meta["chapters"].setdefault(str(ch_id), {})["end"] = \
                 f"images/{end_name}"
+
+            # Per-event images
+            for ev in meta.get("events", []):
+                ev_id = ev.get("id")
+                if not ev_id:
+                    continue
+                ev_prompt = build_image_prompt_for_event(story, ev)
+                ev_name = f"{ev_id}.png"
+                ev_path = events_img_dir / ev_name
+                generate_image(ev_prompt, ev_path, img_settings)
+
+                images_meta["events"][ev_id] = f"images/events/{ev_name}"
 
         ch_info = RunChapterInfo(
             chapter_id=ch_id,
@@ -187,21 +201,10 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
         )
         new_run_chapters.append(ch_info)
 
-        if settings.image_settings and settings.image_settings.enabled:
-            for ev in meta.get("events", []):
-                ev_id = ev.get("id")
-                if not ev_id:
-                    continue
-                ev_prompt = build_image_prompt_for_event(story, ev)
-                ev_name = f"{ev_id}.png"
-                ev_path = events_img_dir / ev_name
-                generate_image(ev_prompt, ev_path, settings.image_settings)
-
-                images_meta["events"][ev_id] = f"images/events/{ev_name}"
-
         # Save after each chapter so we don't lose progress (to run copy only)
         save_story(run_story_path, story)
 
+    # Attach THIS run's info + image metadata
     run_info = RunInfo(
         run_id=run_id,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -213,7 +216,6 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
         chapters=new_run_chapters,
     )
 
-    # Attach THIS run's info to THIS run's story.json only
     story.setdefault("runs", [])
     story["runs"].append(asdict(run_info))
     story["images"] = images_meta
@@ -231,6 +233,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
         "default_target_words": default_target_words,
         "voice_model": settings.voice_model,
         "tokens_per_word": TOKENS_PER_WORD,
+        "images_enabled": bool(img_settings and img_settings.enabled),
     }
     (run_dir / "config.json").write_text(
         __import__("json").dumps(config, indent=2),
@@ -240,6 +243,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     print(f"\nRun complete: {run_id}")
     print(f"Chapters in: {chapters_dir}")
     print(f"Audio in: {audio_dir}")
+    print(f"Images in: {images_dir}")
     print(f"Run story JSON: {run_story_path}")
 
     return run_info

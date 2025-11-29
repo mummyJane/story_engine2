@@ -15,7 +15,7 @@ import json
 from story_core.lmstudio_client import list_lmstudio_models
 from story_core.tts import list_voice_models
 from story_core.runner import run_story_with_settings
-from story_core.model import RunSettings
+from story_core.model import RunSettings, ImageSettings
 from story_core.config import default_voices_dir
 
 # Adjust as needed
@@ -796,6 +796,7 @@ async def runs_start(
     max_tokens_ceiling: str = Form(""),
     default_target_words: str = Form(""),
     voice_model: str = Form(""),
+    images_enabled: Optional[str] = Form(None),
 ):
     story_path = story_json_path(story_id)
     story = load_story(story_id)
@@ -830,12 +831,18 @@ async def runs_start(
 
     voice_model_str = voice_model.strip() or None
 
+    # Image settings: enabled if checkbox present
+    img_settings = None
+    if images_enabled is not None:
+        img_settings = ImageSettings(enabled=True)  # use defaults for now
+
     settings = RunSettings(
         model_id=model_id,
         temperature=temp_val,
         max_tokens_ceiling=mt_val,
         default_target_words=tw_val,
         voice_model=voice_model_str,
+        image_settings=img_settings,
     )
 
     # This will run synchronously in this request.

@@ -49,7 +49,8 @@ def lmstudio_chat(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    resp = requests.post(REST_CHAT, json=payload, timeout=600)
+    print(f"Chapter - {payload}")
+    resp = requests.post(REST_CHAT, json=payload, timeout=60000)
     resp.raise_for_status()
     return resp.json()
 

@@ -146,7 +146,7 @@ Chapter text:
         system_prompt=sys_prompt,
         user_prompt=user_prompt,
         temperature=0.2,
-        max_tokens=1024,
+        max_tokens=(2*1024),
     )
     raw = data["choices"][0]["message"]["content"]
     meta = safe_json_from_text(raw)

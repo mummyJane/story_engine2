@@ -76,7 +76,8 @@ def generate_image(prompt: str, out_path: Path, settings: ImageSettings) -> None
     }
 
     try:
-        resp = requests.post(endpoint, json=payload, timeout=600)
+        print(f" Image payload - {payload}")
+        resp = requests.post(endpoint, json=payload, timeout=60000)
         resp.raise_for_status()
         data = resp.json()
         images = data.get("images", [])
