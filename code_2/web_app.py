@@ -580,6 +580,20 @@ async def run_chapter_detail(
     rel_audio = Path(ch_info["audio_file"])
     audio_url = f"/data/{story_id}/runs/{run_id}/{rel_audio.as_posix()}"
 
+    images = s.get("images", {})
+    ch_images = images.get("chapters", {}).get(str(ch_info["chapter_id"]), {})
+    start_img = ch_images.get("start")
+    end_img = ch_images.get("end")
+
+    start_img_url = (
+        f"/data/{story_id}/runs/{run_id}/{start_img}"
+        if start_img else None
+    )
+    end_img_url = (
+        f"/data/{story_id}/runs/{run_id}/{end_img}"
+        if end_img else None
+    )
+
     return templates.TemplateResponse(
         "run_chapter_detail.html",
         {
@@ -591,6 +605,8 @@ async def run_chapter_detail(
             "chap_state": chap_state,
             "events": chapter_events,
             "audio_url": audio_url,
+            "start_img_url": start_img_url,
+            "end_img_url": end_img_url,
         },
     )
 

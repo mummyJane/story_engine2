@@ -5,6 +5,7 @@
 /code/Data
 /code_2/voices
 /code_2/Data
+/stable-diffusion-webui
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

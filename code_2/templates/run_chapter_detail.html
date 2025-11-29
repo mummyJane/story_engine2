@@ -37,6 +37,16 @@
 <h2>Usage</h2>
 <pre>{{ ch_info.usage | safe }}</pre>
 
+{% if start_img_url %}
+  <h2>Chapter opening image</h2>
+  <img src="{{ start_img_url }}" style="max-width:100%; height:auto;" />
+{% endif %}
+
+{% if end_img_url %}
+  <h2>Chapter closing image</h2>
+  <img src="{{ end_img_url }}" style="max-width:100%; height:auto;" />
+{% endif %}
+
 <h2>Chapter text</h2>
 <pre style="white-space: pre-wrap;">{{ chapter_text }}</pre>
 {% endblock %}

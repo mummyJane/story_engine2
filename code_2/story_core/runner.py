@@ -19,7 +19,13 @@ from .metadata import (
     merge_metadata_into_story,
     build_previous_chapters_summary,
 )
-from .model import RunChapterInfo, RunInfo, RunSettings
+from .model import RunChapterInfo, RunInfo, RunSettings, ImageSettings
+from .image_core import (
+    build_image_prompt_for_chapter_start,
+    build_image_prompt_for_chapter_end,
+    build_image_prompt_for_event,
+    generate_image,
+)
 
 def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     """
@@ -35,7 +41,17 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
 
     story_root = story_path.parent
     runs_root = story_root / "runs"
+    images_dir = run_dir / "images"
+    events_img_dir = images_dir / "events"
+
     runs_root.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    events_img_dir.mkdir(parents=True, exist_ok=True)
+
+    images_meta = {
+        "chapters": {},
+        "events": {}
+    }
 
     # Find next run index from existing run_* directories
     max_index = 0
@@ -102,6 +118,15 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
             f"per_chapter_max_tokens = {per_chapter_max_tokens}"
         )
 
+        if settings.image_settings and settings.image_settings.enabled:
+            start_prompt = build_image_prompt_for_chapter_start(story, ch_outline)
+            start_name = f"ch{ch_id:02d}-start.png"
+            start_path = images_dir / start_name
+            generate_image(start_prompt, start_path, settings.image_settings)
+
+            images_meta["chapters"].setdefault(str(ch_id), {})["start"] = \
+                f"images/{start_name}"
+
         previous_chapters_summary = build_previous_chapters_summary(
             story, upto_chapter_id=ch_id
         )
@@ -144,6 +169,15 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
             meta=meta,
         )
 
+        if settings.image_settings and settings.image_settings.enabled:
+            end_prompt = build_image_prompt_for_chapter_end(story, ch_outline, meta)
+            end_name = f"ch{ch_id:02d}-end.png"
+            end_path = images_dir / end_name
+            generate_image(end_prompt, end_path, settings.image_settings)
+
+            images_meta["chapters"].setdefault(str(ch_id), {})["end"] = \
+                f"images/{end_name}"
+
         ch_info = RunChapterInfo(
             chapter_id=ch_id,
             chapter_slug=slug,
@@ -152,6 +186,18 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
             usage=usage,
         )
         new_run_chapters.append(ch_info)
+
+        if settings.image_settings and settings.image_settings.enabled:
+            for ev in meta.get("events", []):
+                ev_id = ev.get("id")
+                if not ev_id:
+                    continue
+                ev_prompt = build_image_prompt_for_event(story, ev)
+                ev_name = f"{ev_id}.png"
+                ev_path = events_img_dir / ev_name
+                generate_image(ev_prompt, ev_path, settings.image_settings)
+
+                images_meta["events"][ev_id] = f"images/events/{ev_name}"
 
         # Save after each chapter so we don't lose progress (to run copy only)
         save_story(run_story_path, story)
@@ -170,6 +216,7 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     # Attach THIS run's info to THIS run's story.json only
     story.setdefault("runs", [])
     story["runs"].append(asdict(run_info))
+    story["images"] = images_meta
 
     # Final save of run story
     save_story(run_story_path, story)
