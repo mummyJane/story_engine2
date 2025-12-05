@@ -223,6 +223,14 @@ def run_story_with_settings(story_path: Path, settings: RunSettings) -> RunInfo:
     # Final save of run story
     save_story(run_story_path, story)
 
+    # Sync bible back to the base story.json
+    bible_keys = ["world", "chapters_state", "timeline", "default_target_words"]
+    for key in bible_keys:
+        if key in story:
+            base_story[key] = copy.deepcopy(story[key])
+
+    save_story(story_path, base_story)
+
     # Config for quick view
     config = {
         "run_id": run_id,

@@ -52,6 +52,7 @@ def lmstudio_chat(
     print(f"Chapter - {payload}")
     resp = requests.post(REST_CHAT, json=payload, timeout=60000)
     resp.raise_for_status()
+    print(f"resp - {resp.json()}")
     return resp.json()
 
 

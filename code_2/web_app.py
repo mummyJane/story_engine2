@@ -760,7 +760,7 @@ async def timeline_update(
         url=f"/story/{story_id}/timeline",
         status_code=303,
     )
-    
+
 @app.get("/story/{story_id}/runs/new", response_class=HTMLResponse)
 async def run_new(request: Request, story_id: str):
     story = load_story(story_id)
